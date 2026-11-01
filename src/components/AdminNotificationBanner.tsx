@@ -45,13 +45,8 @@ export const AdminNotificationBanner: React.FC<AdminNotificationBannerProps> = (
   const [queue, setQueue] = useState<AlertNotification[]>([]);
   const isInitialLoadRef = useRef(true);
 
-  // Check if current user is the designated admin (01743224700) or stealth admin
-  const cleanPhone = (currentUserPhone || '').replace(/[^0-9]/g, '');
-  const isAdmin =
-    cleanPhone.endsWith('01743224700') ||
-    isUserAdminAccount(currentUserPhone) ||
-    isPublicAdminVisible() ||
-    (typeof window !== 'undefined' && localStorage.getItem('aviator_admin_stealth_mode_v1') === 'true');
+  // STRICT REQUIREMENT: Only the account holder of 01743224700 can receive admin notifications or sounds
+  const isAdmin = isUserAdminAccount(currentUserPhone);
 
   const [pendingDepositCount, setPendingDepositCount] = useState<number>(0);
   const [pendingWithdrawalCount, setPendingWithdrawalCount] = useState<number>(0);

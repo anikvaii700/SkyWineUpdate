@@ -100,8 +100,22 @@ export function calculateTotalLockedBonuses(acc: {
 }
 
 // Helper: Calculate withdrawable balance (শুধুমাত্র উইন হওয়া যে টাকা সেটা উইথড্র দিতে পারবে, বোনাস ও কমিশন কখনই নয়)
-// নিয়ম: একাউন্টে সর্বনিম্ন ১০০ টাকা ব্যালেন্স থাকবে (০ করে উইথড্র করা যাবে না) এবং সকল বোনাস ও কমিশন লক থাকবে
-export function calculateWithdrawableBalance(balance: number, lockedBonuses: number = 0): number {
+// নিয়ম:
+// ১. নূন্যতম ১ বার সফল ডিপোজিট করা বাধ্যতামূলক (ডিপোজিট না থাকলে উত্তোলনযোগ্য ব্যালেন্স ০)
+// ২. একাউন্টে সর্বনিম্ন ১০০ টাকা ব্যালেন্স থাকবে (০ করে উইথড্র করা যাবে না)
+// ৩. সকল বোনাস ও কমিশন লক থাকবে
+export function calculateWithdrawableBalance(
+  balance: number,
+  lockedBonuses: number = 0,
+  hasDeposited?: boolean,
+  totalDeposited?: number
+): number {
+  // ১। ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ ব্লক
+  const userHasDeposited = Boolean(hasDeposited || (totalDeposited !== undefined && totalDeposited > 0));
+  if (!userHasDeposited) {
+    return 0;
+  }
+
   const safeBalance = Math.max(0, balance || 0);
   const safeLocked = Math.max(0, lockedBonuses || 0);
   const minRetained = 100; // একাউন্টে সর্বনিম্ন ১০০ টাকা ব্যালেন্স থাকতে হবে
@@ -121,10 +135,14 @@ export interface UserFullHistoryData {
     lockedPrincipal: number;
     withdrawableBalance: number;
     totalDeposited: number;
+    hasDeposited?: boolean;
     referralCode: string;
     referredBy?: string;
     referralCount: number;
     referralBonusEarned: number;
+    status?: 'active' | 'suspended' | 'banned';
+    suspendedUntil?: string | null;
+    deactivationReason?: string | null;
     createdAt: string;
     updatedAt: string;
   };
@@ -224,9 +242,16 @@ export function getUserFullHistory(identifier: string): UserFullHistoryData | nu
   const netGameProfit = Math.round((totalWonAmount - totalBetsAmount) * 100) / 100;
 
   const lockedBonus = calculateTotalLockedBonuses(targetAccount);
+  const userHasDeposited = Boolean(
+    targetAccount.hasDeposited ||
+    (targetAccount.totalDeposited && targetAccount.totalDeposited > 0) ||
+    totalDepositedAmount > 0
+  );
   const withdrawable = calculateWithdrawableBalance(
     targetAccount.balance,
-    lockedBonus
+    lockedBonus,
+    userHasDeposited,
+    targetAccount.totalDeposited || totalDepositedAmount
   );
 
   return {
@@ -241,10 +266,14 @@ export function getUserFullHistory(identifier: string): UserFullHistoryData | nu
       lockedPrincipal: lockedBonus,
       withdrawableBalance: withdrawable,
       totalDeposited: targetAccount.totalDeposited || totalDepositedAmount,
+      hasDeposited: userHasDeposited,
       referralCode: targetAccount.referralCode || targetAccount.userCode,
       referredBy: targetAccount.referredBy,
       referralCount: targetAccount.referralCount || userReferrals.length,
       referralBonusEarned: targetAccount.referralBonusEarned || userReferrals.length * 50,
+      status: targetAccount.status || 'active',
+      suspendedUntil: targetAccount.suspendedUntil || null,
+      deactivationReason: targetAccount.deactivationReason || null,
       createdAt: targetAccount.createdAt,
       updatedAt: targetAccount.updatedAt,
     },
@@ -274,9 +303,13 @@ export function getAllAccountsWithStats(): Array<{
   lockedPrincipal: number;
   withdrawableBalance: number;
   totalDeposited: number;
+  hasDeposited?: boolean;
   referralCode: string;
   referralCount: number;
   referralBonusEarned: number;
+  status?: 'active' | 'suspended' | 'banned';
+  suspendedUntil?: string | null;
+  deactivationReason?: string | null;
   createdAt: string;
   updatedAt: string;
 }> {
@@ -289,7 +322,8 @@ export function getAllAccountsWithStats(): Array<{
       referrals.filter((r) => r.referrerCode.toUpperCase() === acc.userCode?.toUpperCase()).length;
 
     const lockedBonus = calculateTotalLockedBonuses(acc);
-    const withdrawable = calculateWithdrawableBalance(acc.balance, lockedBonus);
+    const hasDep = Boolean(acc.hasDeposited || (acc.totalDeposited && acc.totalDeposited > 0));
+    const withdrawable = calculateWithdrawableBalance(acc.balance, lockedBonus, hasDep, acc.totalDeposited);
 
     return {
       uid: acc.uid,
@@ -301,9 +335,13 @@ export function getAllAccountsWithStats(): Array<{
       lockedPrincipal: lockedBonus,
       withdrawableBalance: withdrawable,
       totalDeposited: acc.totalDeposited || 0,
+      hasDeposited: hasDep,
       referralCode: acc.referralCode || acc.userCode,
       referralCount: inviteCount,
       referralBonusEarned: acc.referralBonusEarned || inviteCount * 50,
+      status: acc.status || 'active',
+      suspendedUntil: acc.suspendedUntil || null,
+      deactivationReason: acc.deactivationReason || null,
       createdAt: acc.createdAt,
       updatedAt: acc.updatedAt,
     };
@@ -339,10 +377,14 @@ export async function syncUsersFromFirestore(): Promise<ReturnType<typeof getAll
         initialBonus: typeof data.initialBonus === 'number' ? data.initialBonus : 100,
         lockedPrincipal: typeof data.lockedPrincipal === 'number' ? data.lockedPrincipal : 0,
         totalDeposited: typeof data.totalDeposited === 'number' ? data.totalDeposited : 0,
+        hasDeposited: Boolean(data.hasDeposited || (data.totalDeposited && data.totalDeposited > 0)),
         referralCode: data.referralCode || data.userCode || `USER-${key.slice(-5)}`,
         referredBy: data.referredBy || undefined,
         referralCount: typeof data.referralCount === 'number' ? data.referralCount : 0,
         referralBonusEarned: typeof data.referralBonusEarned === 'number' ? data.referralBonusEarned : 0,
+        status: data.status || 'active',
+        suspendedUntil: data.suspendedUntil || null,
+        deactivationReason: data.deactivationReason || null,
         createdAt: data.createdAt || new Date().toISOString(),
         updatedAt: data.updatedAt || new Date().toISOString(),
       };

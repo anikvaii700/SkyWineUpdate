@@ -4,6 +4,7 @@ import { Language, translations } from '../utils/i18n';
 import confetti from 'canvas-confetti';
 import { Clock, History, HelpCircle, Trophy, AlertTriangle } from 'lucide-react';
 import { AppUser } from '../services/phoneAuth';
+import { recordUserBet } from '../services/userManagement';
 
 interface WingoGameProps {
   balance: number;
@@ -56,7 +57,35 @@ export const WingoGame: React.FC<WingoGameProps> = ({
     const currentBets = activeBetsRef.current;
     const currentIssue = issueNumberRef.current;
 
-    const winningNum = Math.floor(Math.random() * 10);
+    // Requirement 2: House protection algorithm ("ইউজার কখনই এডমিন থেকে বেশি জয়ী হবে না")
+    let winningNum = Math.floor(Math.random() * 10);
+
+    if (currentBets.length > 0) {
+      // Evaluate all 10 possible numbers
+      const outcomes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
+        let color: 'green' | 'red' | 'violet' = 'green';
+        if (num === 0 || num === 5) color = 'violet';
+        else if (num % 2 === 0) color = 'red';
+        else color = 'green';
+        const size: 'Big' | 'Small' = num >= 5 ? 'Big' : 'Small';
+
+        let payout = 0;
+        currentBets.forEach((b) => {
+          if (b.type === color) payout += b.amount * 2;
+          else if (b.type === size) payout += b.amount * 2;
+          else if (b.type === String(num)) payout += b.amount * 9;
+        });
+        return { num, color, size, payout };
+      });
+
+      // House protection: If user has placed bets, 85% of rounds favour the house
+      const losingOutcomes = outcomes.filter((o) => o.payout === 0);
+      if (losingOutcomes.length > 0 && Math.random() < 0.82) {
+        const picked = losingOutcomes[Math.floor(Math.random() * losingOutcomes.length)];
+        winningNum = picked.num;
+      }
+    }
+
     let winningColor: 'green' | 'red' | 'violet' = 'green';
     if (winningNum === 0 || winningNum === 5) {
       winningColor = 'violet';
@@ -79,13 +108,31 @@ export const WingoGame: React.FC<WingoGameProps> = ({
     // Check winnings for player's active bets
     let totalWin = 0;
     currentBets.forEach((b) => {
+      let betWon = false;
+      let payout = 0;
       if (b.type === winningColor) {
         totalWin += b.amount * 2;
+        payout = b.amount * 2;
+        betWon = true;
       } else if (b.type === winningSize) {
         totalWin += b.amount * 2;
+        payout = b.amount * 2;
+        betWon = true;
       } else if (b.type === String(winningNum)) {
         totalWin += b.amount * 9;
+        payout = b.amount * 9;
+        betWon = true;
       }
+
+      recordUserBet({
+        userId: currentUser?.uid || 'guest',
+        userCode: currentUser?.userCode,
+        gameType: 'wingo',
+        stake: b.amount,
+        multiplier: betWon ? (b.type === String(winningNum) ? 9 : 2) : 0,
+        payout,
+        outcome: betWon ? 'won' : 'lost',
+      });
     });
 
     if (totalWin > 0) {
@@ -108,7 +155,7 @@ export const WingoGame: React.FC<WingoGameProps> = ({
     // Reset bets and advance issue number
     setActiveBets([]);
     setIssueNumber((prev) => String(BigInt(prev) + 1n));
-  }, []);
+  }, [currentUser]);
 
   // Pure 60-second countdown game loop (never calls setState of other components inside updater)
   useEffect(() => {

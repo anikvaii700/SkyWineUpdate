@@ -78,13 +78,14 @@ import { AdminUserEditModal } from './AdminUserEditModal';
 import { AdminStealthGuideModal } from './AdminStealthGuideModal';
 import { getAllAccountsWithStats, calculateWithdrawableBalance, syncUsersFromFirestore } from '../services/userManagement';
 import { StoredPhoneAccount, getStoredPhoneAccounts } from '../services/phoneAuth';
-import { setAdminVisible, getRegisteredAdminPhone, saveRegisteredAdminPhone } from '../services/adminAuth';
+import { setAdminVisible, getRegisteredAdminPhone, saveRegisteredAdminPhone, isUserAdminAccount } from '../services/adminAuth';
 import { db } from '../services/firebase';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 
 interface AdminPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  currentUserPhone?: string | null;
   onBalanceAdjusted?: () => void;
   initialTab?: 'requests' | 'withdrawals' | 'settings' | 'users' | 'marquee' | 'notifications';
 }
@@ -92,9 +93,18 @@ interface AdminPanelProps {
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   isOpen,
   onClose,
+  currentUserPhone,
   onBalanceAdjusted,
   initialTab,
 }) => {
+  const isAuthorized = isUserAdminAccount(currentUserPhone);
+
+  useEffect(() => {
+    if (isOpen && !isAuthorized) {
+      onClose();
+    }
+  }, [isOpen, isAuthorized, onClose]);
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>('');
   const [pinError, setPinError] = useState<string>('');
@@ -103,10 +113,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [activeTab, setActiveTab] = useState<'requests' | 'withdrawals' | 'users' | 'marquee' | 'settings' | 'notifications'>(initialTab || 'requests');
 
   useEffect(() => {
-    if (initialTab && isOpen) {
+    if (initialTab && isOpen && isAuthorized) {
       setActiveTab(initialTab);
     }
-  }, [initialTab, isOpen]);
+  }, [initialTab, isOpen, isAuthorized]);
 
   // Broadcast Notification Tab State
   const [broadcastList, setBroadcastList] = useState<BroadcastNotification[]>(getStoredBroadcastNotifications);
@@ -314,7 +324,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
   }, [onBalanceAdjusted]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !isAuthorized) return null;
 
   // Handle PIN verification (Strict check against currently saved admin PIN)
   const handlePinSubmit = (e: React.FormEvent) => {
@@ -2906,28 +2916,67 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               initialBonus: 100,
                               lockedPrincipal: acc.lockedPrincipal,
                               totalDeposited: acc.totalDeposited,
+                              hasDeposited: acc.hasDeposited,
                               referralCode: acc.referralCode,
                               referralCount: acc.referralCount,
                               referralBonusEarned: acc.referralBonusEarned,
+                              status: acc.status || 'active',
+                              suspendedUntil: acc.suspendedUntil,
+                              deactivationReason: acc.deactivationReason,
                               createdAt: acc.createdAt,
                               updatedAt: acc.updatedAt,
                             });
                           }
                         };
 
+                        const isSuspended = acc.status === 'suspended' && acc.suspendedUntil && new Date(acc.suspendedUntil).getTime() > Date.now();
+                        const isBanned = acc.status === 'banned';
+
                         return (
                           <div
                             key={acc.uid}
-                            className="bg-[#0b1018] border border-[#1e2a3e] hover:border-[#2f4262] rounded-2xl p-4 flex flex-col justify-between gap-3 transition-colors shadow-lg"
+                            className={`border rounded-2xl p-4 flex flex-col justify-between gap-3 transition-colors shadow-lg ${
+                              isBanned
+                                ? 'bg-[#180a0d] border-rose-600/50 hover:border-rose-500'
+                                : isSuspended
+                                ? 'bg-[#18120a] border-amber-500/40 hover:border-amber-400'
+                                : 'bg-[#0b1018] border-[#1e2a3e] hover:border-[#2f4262]'
+                            }`}
                           >
                             {/* User Header */}
                             <div className="flex items-start justify-between gap-2">
                               <div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-1.5">
                                   <span className="font-bold text-sm text-white">{acc.displayName}</span>
                                   <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-mono text-[11px] font-bold border border-amber-500/30">
                                     {acc.userCode}
                                   </span>
+
+                                  {/* Status Badge */}
+                                  {isBanned ? (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-rose-500/20 text-rose-300 text-[10px] font-bold border border-rose-500/40">
+                                      🚫 ব্যান
+                                    </span>
+                                  ) : isSuspended ? (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/40">
+                                      ⏳ স্থগিত
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/40">
+                                      ✓ সক্রিয়
+                                    </span>
+                                  )}
+
+                                  {/* Deposit Badge */}
+                                  {acc.hasDeposited || (acc.totalDeposited && acc.totalDeposited > 0) ? (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 text-[10px] font-mono font-bold border border-emerald-500/30">
+                                      ডিপোজিট: ৳{acc.totalDeposited.toLocaleString()}
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-400 text-[10px] font-bold border border-rose-500/30">
+                                      ডিপোজিট নেই (উইথড্র ব্লক)
+                                    </span>
+                                  )}
                                 </div>
                                 <span className="text-xs font-mono text-slate-300 block mt-0.5">
                                   📱 +88 {acc.phoneNumber}
@@ -2935,6 +2984,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 <span className="text-[10px] text-slate-400 block mt-0.5">
                                   রেজিস্ট্রেশন: {new Date(acc.createdAt).toLocaleDateString('bn-BD')}
                                 </span>
+                                {isSuspended && acc.suspendedUntil && (
+                                  <span className="text-[10px] text-amber-400 block mt-0.5 font-mono">
+                                    স্থগিত মেয়াদ: {new Date(acc.suspendedUntil).toLocaleString('bn-BD', { dateStyle: 'short', timeStyle: 'short' })}
+                                  </span>
+                                )}
                               </div>
 
                               <div className="text-right">
@@ -2948,7 +3002,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             {/* Financial Breakdown & Referral Metrics */}
                             <div className="grid grid-cols-3 gap-1.5 text-center bg-[#070b12] p-2 rounded-xl border border-white/5 text-[10.5px]">
                               <div>
-                                <span className="text-slate-400 block text-[9.5px]">রেফার কমিশন:</span>
+                                <span className="text-slate-400 block text-[9.5px]">প্লে ব্যালেন্স (লক):</span>
                                 <span className="font-bold text-amber-400 font-mono">
                                   ৳ {acc.lockedPrincipal.toLocaleString()}
                                 </span>

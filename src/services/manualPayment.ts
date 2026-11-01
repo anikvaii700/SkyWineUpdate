@@ -791,6 +791,68 @@ export async function submitManualWithdrawalRequest(params: {
     return { success: false, error: 'অনুগ্রহ করে সঠিক ১১ ডিজিটের পার্সোনাল নম্বর লিখুন (যেমন: 017xxxxxxxx)।' };
   }
 
+  // ১। ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ ব্লক (নূন্যতম ১ বার ডিপোজিট বাধ্যতামূলক)
+  let hasValidDeposit = false;
+
+  // Check 1: Check deposit requests in localStorage
+  try {
+    const deposits = getStoredDepositRequests();
+    const approvedDeposit = deposits.find(
+      (d) =>
+        d.status === 'approved' &&
+        (d.userId === userId ||
+          (userCode && d.userCode && d.userCode.toUpperCase() === userCode.toUpperCase()) ||
+          d.senderNumber.includes(cleanPersonalNumber) ||
+          (d.userIdentifier && d.userIdentifier.includes(cleanPersonalNumber)))
+    );
+    if (approvedDeposit) {
+      hasValidDeposit = true;
+    }
+  } catch {}
+
+  // Check 2: Check local phone accounts
+  if (!hasValidDeposit) {
+    try {
+      const rawAccounts = localStorage.getItem('aviator_phone_accounts_v1');
+      if (rawAccounts) {
+        const accounts = JSON.parse(rawAccounts);
+        for (const k of Object.keys(accounts)) {
+          const acc = accounts[k];
+          if (
+            acc.uid === userId ||
+            acc.phoneNumber === cleanPersonalNumber ||
+            (userCode && acc.userCode && acc.userCode.toUpperCase() === userCode.toUpperCase())
+          ) {
+            if (acc.hasDeposited || (acc.totalDeposited && acc.totalDeposited > 0)) {
+              hasValidDeposit = true;
+              break;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Check 3: Check Firestore if not yet found
+  if (!hasValidDeposit) {
+    try {
+      const userSnap = await getDoc(doc(db, 'users', userId));
+      if (userSnap.exists()) {
+        const udata = userSnap.data();
+        if (udata && (udata.hasDeposited || (udata.totalDeposited && udata.totalDeposited > 0))) {
+          hasValidDeposit = true;
+        }
+      }
+    } catch {}
+  }
+
+  if (!hasValidDeposit) {
+    return {
+      success: false,
+      error: '🚫 ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ বন্ধ! উইথড্র করার জন্য আপনার একাউন্টে নূন্যতম ১ বার সফল ডিপোজিট করা বাধ্যতামূলক।',
+    };
+  }
+
   const now = new Date().toISOString();
   const requestId = `wth_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 

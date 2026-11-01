@@ -4,6 +4,7 @@ import { translations, Language } from '../utils/i18n';
 import { UserWalletProfile } from '../services/firebase';
 import { AppUser } from '../services/phoneAuth';
 import { soundManager } from '../services/audio';
+import { isUserAdminAccount } from '../services/adminAuth';
 
 interface HeaderProps {
   balance: number;
@@ -30,6 +31,7 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   balance,
+  currentUser,
   onOpenMenu,
   onOpenDeposit,
   onOpenAdmin,
@@ -39,12 +41,21 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSound,
 }) => {
   // Stealth method: Tap the SkyWin brand logo 5 times to open Admin Panel
+  // STRICT: Only allowed if logged in as 01743224700. For everyone else, zero hint or access.
   const logoClicksRef = useRef<number>(0);
   const lastClickTimeRef = useRef<number>(0);
+  const isAdmin = isUserAdminAccount(currentUser?.phoneNumber);
 
   const handleLogoClick = (e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    // If not the authorized admin 01743224700, behave as ordinary tap with zero admin logic
+    if (!isAdmin) {
+      soundManager.playClick();
+      return;
+    }
+
     const now = Date.now();
     const isFastClick = now - lastClickTimeRef.current < 2500;
     const nextCount = isFastClick ? logoClicksRef.current + 1 : 1;

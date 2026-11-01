@@ -11,6 +11,9 @@ export interface AppUser {
   phoneNumber: string | null;
   photoURL: string | null;
   provider: 'google' | 'phone';
+  status?: 'active' | 'suspended' | 'banned';
+  suspendedUntil?: string | null;
+  deactivationReason?: string | null;
 }
 
 export interface StoredPhoneAccount {
@@ -30,8 +33,57 @@ export interface StoredPhoneAccount {
   referredBy?: string; // Referrer's userCode
   referralCount: number; // Total friends invited
   referralBonusEarned: number; // ৳ 50 * referralCount
+  status?: 'active' | 'suspended' | 'banned'; // active, suspended (temporary), banned (permanent)
+  suspendedUntil?: string | null; // ISO timestamp for temporary suspension expiration
+  deactivationReason?: string | null; // Reason why user was deactivated
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AccountSuspensionInfo {
+  isDeactivated: boolean;
+  isBanned?: boolean;
+  isSuspended?: boolean;
+  reason?: string;
+  suspendedUntil?: string | null;
+  remainingMinutes?: number;
+}
+
+/**
+ * Checks whether an account is currently banned or temporarily suspended
+ */
+export function checkAccountSuspensionStatus(account?: {
+  status?: string;
+  suspendedUntil?: string | null;
+  deactivationReason?: string | null;
+} | null): AccountSuspensionInfo {
+  if (!account) return { isDeactivated: false };
+
+  if (account.status === 'banned') {
+    return {
+      isDeactivated: true,
+      isBanned: true,
+      reason: account.deactivationReason || 'এডমিন কর্তৃক অ্যাকাউন্টটি স্থায়ীভাবে ডিঅ্যাক্টিভ (Banned) করা হয়েছে।',
+    };
+  }
+
+  if (account.status === 'suspended' && account.suspendedUntil) {
+    const expiry = new Date(account.suspendedUntil).getTime();
+    const now = Date.now();
+    if (expiry > now) {
+      const remainingMs = expiry - now;
+      const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+      return {
+        isDeactivated: true,
+        isSuspended: true,
+        reason: account.deactivationReason || 'অ্যাকাউন্টটি সাময়িকভাবে ডিঅ্যাক্টিভ রাখা হয়েছে।',
+        suspendedUntil: account.suspendedUntil,
+        remainingMinutes,
+      };
+    }
+  }
+
+  return { isDeactivated: false };
 }
 
 export interface ReferralRecord {
@@ -430,6 +482,23 @@ export async function loginPhoneAccount(
     }
   } catch {}
 
+  // Check if account is suspended or banned
+  const suspension = checkAccountSuspensionStatus(account);
+  if (suspension.isDeactivated) {
+    if (suspension.isBanned) {
+      return {
+        success: false,
+        error: `🚫 অ্যাকাউন্টটি স্থায়ীভাবে ডিঅ্যাক্টিভ (Banned)। কারণ: ${suspension.reason}`,
+      };
+    } else if (suspension.isSuspended) {
+      const untilStr = new Date(suspension.suspendedUntil!).toLocaleString('bn-BD');
+      return {
+        success: false,
+        error: `⏳ অ্যাকাউন্টটি সাময়িকভাবে ডিঅ্যাক্টিভ আছে (${untilStr} পর্যন্ত)। কারণ: ${suspension.reason}`,
+      };
+    }
+  }
+
   // Set active session
   try {
     localStorage.setItem(STORAGE_SESSION_KEY, cleanPhone);
@@ -484,6 +553,9 @@ export function getActivePhoneSession(): { user: AppUser; profile: UserWalletPro
         phoneNumber: account.phoneNumber,
         photoURL: null,
         provider: 'phone',
+        status: account.status || 'active',
+        suspendedUntil: account.suspendedUntil,
+        deactivationReason: account.deactivationReason,
       },
       profile: {
         id: account.uid,
@@ -495,10 +567,14 @@ export function getActivePhoneSession(): { user: AppUser; profile: UserWalletPro
         initialBonus: account.initialBonus || 100,
         lockedPrincipal: account.lockedPrincipal !== undefined ? account.lockedPrincipal : account.balance,
         totalDeposited: account.totalDeposited || 0,
+        hasDeposited: Boolean(account.hasDeposited || (account.totalDeposited && account.totalDeposited > 0)),
         referralCode: account.referralCode || account.userCode,
         referredBy: account.referredBy,
         referralCount: account.referralCount || 0,
         referralBonusEarned: account.referralBonusEarned || 0,
+        status: account.status || 'active',
+        suspendedUntil: account.suspendedUntil,
+        deactivationReason: account.deactivationReason,
         createdAt: account.createdAt,
         updatedAt: account.updatedAt,
       },
@@ -625,6 +701,15 @@ export function adminUpdatePhoneAccount(
   if (updates.lockedPrincipal !== undefined && !isNaN(updates.lockedPrincipal)) {
     existing.lockedPrincipal = Math.max(0, Math.round(updates.lockedPrincipal * 100) / 100);
   }
+  if (updates.status !== undefined) {
+    existing.status = updates.status;
+  }
+  if (updates.suspendedUntil !== undefined) {
+    existing.suspendedUntil = updates.suspendedUntil;
+  }
+  if (updates.deactivationReason !== undefined) {
+    existing.deactivationReason = updates.deactivationReason;
+  }
   existing.updatedAt = now;
 
   accounts[targetKey] = existing;
@@ -653,6 +738,9 @@ export function adminUpdatePhoneAccount(
       balance: existing.balance,
       lockedPrincipal: existing.lockedPrincipal,
       phoneNumber: existing.phoneNumber,
+      status: existing.status || 'active',
+      suspendedUntil: existing.suspendedUntil || null,
+      deactivationReason: existing.deactivationReason || null,
       updatedAt: now,
     }).catch((err) => console.warn('Could not sync user update to Firestore:', err));
   } catch (fsErr) {

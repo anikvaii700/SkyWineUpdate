@@ -17,6 +17,7 @@ import {
   Info,
   AlertTriangle,
   Sparkles,
+  PlusCircle,
 } from 'lucide-react';
 import { soundManager } from '../services/audio';
 import { Language, translations } from '../utils/i18n';
@@ -204,6 +205,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     let rewardBonus = 0;
     let explicitLocked = 100;
     let isFirstTime = true;
+    let totalDeposited = 0;
+    let hasDeposited = false;
 
     const phoneSession = getActivePhoneSession();
     if (phoneSession?.user.phoneNumber) {
@@ -215,14 +218,18 @@ export const DepositModal: React.FC<DepositModalProps> = ({
         firstDepBonus = acc.firstDepositBonusEarned || 0;
         rewardBonus = acc.rewardBonusEarned || 0;
         explicitLocked = acc.lockedPrincipal || 0;
-        isFirstTime = (acc.totalDeposited || 0) <= 0 && !acc.hasDeposited;
+        totalDeposited = acc.totalDeposited || 0;
+        hasDeposited = Boolean(acc.hasDeposited || totalDeposited > 0);
+        isFirstTime = !hasDeposited;
       } else {
         initialBonus = 100;
         refBonus = phoneSession.profile.referralBonusEarned || 0;
         firstDepBonus = (phoneSession.profile as any).firstDepositBonusEarned || 0;
         rewardBonus = (phoneSession.profile as any).rewardBonusEarned || 0;
         explicitLocked = phoneSession.profile.lockedPrincipal || 0;
-        isFirstTime = (phoneSession.profile.totalDeposited || 0) <= 0;
+        totalDeposited = phoneSession.profile.totalDeposited || 0;
+        hasDeposited = Boolean((phoneSession.profile as any).hasDeposited || totalDeposited > 0);
+        isFirstTime = !hasDeposited;
       }
     } else if (userProfile) {
       initialBonus = 100;
@@ -230,7 +237,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       firstDepBonus = (userProfile as any).firstDepositBonusEarned || 0;
       rewardBonus = (userProfile as any).rewardBonusEarned || 0;
       explicitLocked = userProfile.lockedPrincipal || 0;
-      isFirstTime = (userProfile.totalDeposited || 0) <= 0 && !(userProfile as any).hasDeposited;
+      totalDeposited = userProfile.totalDeposited || 0;
+      hasDeposited = Boolean((userProfile as any).hasDeposited || totalDeposited > 0);
+      isFirstTime = !hasDeposited;
     }
 
     const totalLockedBonuses = calculateTotalLockedBonuses({
@@ -241,7 +250,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       lockedPrincipal: explicitLocked,
     });
 
-    const withdrawableAmount = calculateWithdrawableBalance(currentBalance, totalLockedBonuses);
+    const withdrawableAmount = calculateWithdrawableBalance(currentBalance, totalLockedBonuses, hasDeposited, totalDeposited);
 
     return {
       initialBonus,
@@ -251,6 +260,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       totalLockedBonuses,
       withdrawableAmount,
       isFirstTime,
+      hasDeposited,
+      totalDeposited,
     };
   };
 
@@ -348,7 +359,14 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     }
 
     // Calculate all locked bonuses (welcome, first deposit bonus %, referral commissions, rewards)
-    const { totalLockedBonuses, withdrawableAmount } = getUserBonusBreakdown();
+    const { totalLockedBonuses, withdrawableAmount, hasDeposited } = getUserBonusBreakdown();
+
+    // ১। ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ ব্লক: ভবিষ্যতে যাতে কোনো ডিপোজিট ছাড়া কেউ উইথড্র রিকোয়েস্টই সাবমিট করতে না পারে
+    if (!hasDeposited) {
+      setWithdrawError('🚫 ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ বন্ধ! উইথড্র করার জন্য আপনার একাউন্টে নূন্যতম ১ বার সফল ডিপোজিট করা বাধ্যতামূলক।');
+      soundManager.playCrash();
+      return;
+    }
 
     if (!withdrawAmount || withdrawAmount < 500) {
       setWithdrawError('ক্যাশআউট মিনিমাম ৫০০ টাকা হতে হবে।');
@@ -1049,6 +1067,36 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
             {/* WITHDRAW FORM */}
             {withdrawView === 'form' && (
+              !bonusInfo.hasDeposited ? (
+                <div className="bg-gradient-to-b from-rose-950/70 via-[#16101c] to-[#0d121c] border-2 border-rose-500/50 rounded-2xl p-5 sm:p-6 text-center space-y-4 shadow-2xl animate-fadeIn">
+                  <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500/40 text-rose-400 mx-auto flex items-center justify-center shadow-lg">
+                    <AlertCircle className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <h4 className="text-base sm:text-lg font-black text-white">
+                      🚫 ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ বন্ধ!
+                    </h4>
+                    <p className="text-xs text-rose-200/90 leading-relaxed max-w-sm mx-auto mt-2">
+                      ভবিষ্যতে ফ্রড ও বোনাস অপব্যবহার রোধে <strong>নূন্যতম ১ বার সফল ডিপোজিট</strong> করা বাধ্যতামূলক। ডিপোজিট করার সাথে সাথেই আপনার অ্যাকাউন্ট ভেরিফাইড হবে ও উত্তোলনের সুযোগ চালু হবে।
+                    </p>
+                  </div>
+                  <div className="bg-[#0b0f17] border border-white/10 rounded-xl p-3 text-xs text-slate-300 flex items-center justify-between">
+                    <span className="text-slate-400">আপনার ডিপোজিট স্ট্যাটাস:</span>
+                    <span className="font-bold text-rose-400 bg-rose-500/20 px-2 py-0.5 rounded-md">০ ডিপোজিট (অসম্পূর্ণ)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundManager.playClick();
+                      setActiveTab('deposit');
+                    }}
+                    className="w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white font-black text-sm uppercase tracking-wide shadow-xl shadow-emerald-900/40 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-98"
+                  >
+                    <PlusCircle className="w-4 h-4 font-bold" />
+                    <span>এখনই ডিপোজিট করুন (এড মানি)</span>
+                  </button>
+                </div>
+              ) : (
               <form onSubmit={handleSubmitWithdrawal} className="space-y-4">
                 {/* 1. Payment Method Selector: bKash / Nagad / Rocket */}
                 <div>
@@ -1369,7 +1417,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                   </span>
                 </div>
               </form>
-            )}
+            ))}
 
             {/* WITHDRAW HISTORY VIEW */}
             {withdrawView === 'history' && (

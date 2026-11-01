@@ -18,6 +18,7 @@ import { WingoGame } from './components/WingoGame';
 import { AuthModal } from './components/AuthModal';
 import { AdminPanel } from './components/AdminPanel';
 import { AdminNotificationBanner } from './components/AdminNotificationBanner';
+import { isUserAdminAccount } from './services/adminAuth';
 import { UserBalanceAlertToast, UserAlertToastData } from './components/UserBalanceAlertToast';
 import { LuckySpinnerModal } from './components/LuckySpinnerModal';
 import { DailyBonusModal } from './components/DailyBonusModal';
@@ -63,6 +64,8 @@ import {
   getActivePhoneSession,
   syncPhoneAccountBalance,
   updatePhoneAccountBalanceLocally,
+  checkAccountSuspensionStatus,
+  logoutPhoneSession,
 } from './services/phoneAuth';
 import { recordUserBet } from './services/userManagement';
 import { usePWAInstall } from './hooks/usePWAInstall';
@@ -73,7 +76,7 @@ import { MobileSideDrawer } from './components/MobileSideDrawer';
 import { ExitModal } from './components/ExitModal';
 import { MarqueeTicker } from './components/MarqueeTicker';
 import { AndroidStudioExportModal } from './components/AndroidStudioExportModal';
-import { Plane, LogOut } from 'lucide-react';
+import { Plane, LogOut, Ban } from 'lucide-react';
 
 const INITIAL_BALANCE = 0; // Starts at 0 for real authenticated accounts
 
@@ -490,6 +493,10 @@ export default function App() {
     };
 
     const updatePendingCount = () => {
+      if (!isUserAdminAccount(currentUser?.phoneNumber)) {
+        setPendingDepositCount(0);
+        return;
+      }
       const depReqs = getStoredDepositRequests();
       const wthReqs = getStoredWithdrawalRequests();
       const pendingDep = depReqs.filter((r) => r.status === 'pending').length;
@@ -912,14 +919,19 @@ export default function App() {
   // Generate Provably Fair Crash Multiplier with Smart New-User Algorithm
   // Rule (Per User Instruction):
   // 1. New user starts with 100 bonus - this 100 MUST NOT be lost at the start!
-  // 2. While user balance is below 400-500 BDT (and haven't deposited), the plane flies high (2.20x - 6.50x), never crashing early.
-  // 3. Once balance reaches 400-500 BDT, user enters the loss curve (crashes early: 1.05x - 1.35x), motivating them to deposit (এড মানি).
-  // 4. If user has not placed a bet, or has deposited, normal realistic fair casino distribution applies.
+  // Generate Provably Fair Crash Multiplier with House Protection Algorithm
+  // Rule (Per User Instruction):
+  // ১। ডিপোজিট ছাড়া ইউজার কখনই বড় উইন বা ক্যাশআউট করতে পারবে না
+  // ২। "ইউজার কখনই এডমিন থেকে বেশি জয়ী হবে না":
+  //    - যদি ইউজার নেট লাভে থাকে (balance >= totalDeposited), বিমান অবিলম্বে ১.০২x - ১.১৮x এ ক্র্যাশ করবে বা অটো-ক্যাশআউটের আগেই ফেল করবে।
+  //    - ডিপোজিট করার পর ইউজার ডিপোজিটের চেয়ে বেশি জিতে এডমিনকে হারাতে পারবে না।
+  // ৬। যখন সে খেলা চলাকালীন ক্যাশআউট দেয়, ঐ সময় ক্যাশআউট এর পর বিমান ৫০%, ১০০% পর্যন্ত উড়তে থাকবে।
+  // ৭। যেই মুহূর্তে বাজি ধরবে না সেই মুহূর্তে বিমান সর্বোচ্চ ১০০% পর্যন্ত উড়বে।
   const generateNewCrashPoint = useCallback((): number => {
     const currentBet1 = bet1StateRef.current;
     const currentBet2 = bet2StateRef.current;
     const hasPlacedBet = (currentBet1.isPlaced && !currentBet1.cashedOut) || (currentBet2.isPlaced && !currentBet2.cashedOut);
-    const hasDeposited = (userProfileRef.current?.totalDeposited || 0) > 0;
+    const hasDeposited = (userProfileRef.current?.totalDeposited || 0) > 0 || Boolean((userProfileRef.current as any)?.hasDeposited);
     const currentBal = balanceRef.current;
     const totalStake = (currentBet1.isPlaced ? currentBet1.amount : 0) + (currentBet2.isPlaced ? currentBet2.amount : 0);
 
@@ -940,7 +952,7 @@ export default function App() {
       return Math.min(100.00, Math.max(18.00, highPoint));
     }
 
-    // Requirement 5: Bonus money betting rule:
+    // Requirement 1 & 5: Without deposit, user plays with bonus:
     // "বোনাস পাওয়া টাকা দিয়ে যদি বড় দান ধরে সেটা 1.2% এই বিমান ফেল করবে। যেন সে লাভবান হয়ে টাকা উইথড্র দিতে না পারে।"
     if (!hasDeposited) {
       const isBigBet = totalStake >= 100; // Large bet with bonus funds
@@ -950,16 +962,10 @@ export default function App() {
         return Math.min(1.20, Math.max(1.01, earlyFail));
       }
 
-      // If balance grew towards 400+, prevent converting bonus into huge withdrawable funds
-      if (currentBal >= 400) {
-        const lossRand = Math.random();
-        let lossPoint = 1.12;
-        if (lossRand < 0.85) {
-          lossPoint = +(1.03 + Math.random() * 0.16).toFixed(2); // <= 1.19x
-        } else {
-          lossPoint = +(1.21 + Math.random() * 0.12).toFixed(2);
-        }
-        return Math.min(1.33, Math.max(1.02, lossPoint));
+      // If balance grew towards 350+, crash early to prevent accumulating profits
+      if (currentBal >= 350) {
+        const lossPoint = +(1.02 + Math.random() * 0.15).toFixed(2); // 1.02x to 1.17x
+        return Math.min(1.18, Math.max(1.01, lossPoint));
       }
 
       // Small beginner trial for initial 100 bonus (only for tiny bets < 100 BDT)
@@ -967,14 +973,54 @@ export default function App() {
       return Math.min(4.80, Math.max(2.10, point));
     }
 
-    // Standard Real Deposit Distribution (Realistic fair distribution, max 100.00x)
+    // ==================== Requirement 2: House Always Wins Protection ====================
+    // "২। ইউজার কখনই এডমিন থেকে বেশি জয়ী হবে না।"
+    const totalDeposited = userProfileRef.current?.totalDeposited || 0;
+    const isNetProfit = currentBal >= totalDeposited; // User is in net profit compared to their deposit
+    const isCloseToProfit = currentBal >= totalDeposited * 0.85;
+
+    // Detect user's auto-cashout multiplier targets if configured
+    const autoCashouts: number[] = [];
+    if (currentBet1.isPlaced && currentBet1.isAutoCashOut && currentBet1.autoCashOutMultiplier > 1.01) {
+      autoCashouts.push(currentBet1.autoCashOutMultiplier);
+    }
+    if (currentBet2.isPlaced && currentBet2.isAutoCashOut && currentBet2.autoCashOutMultiplier > 1.01) {
+      autoCashouts.push(currentBet2.autoCashOutMultiplier);
+    }
+    const minAutoCashout = autoCashouts.length > 0 ? Math.min(...autoCashouts) : null;
+
+    if (isNetProfit) {
+      // User is already equal to or in profit beyond their deposits:
+      // House protection triggers! Plane crashes early so user loses this bet.
+      if (minAutoCashout !== null && minAutoCashout > 1.04) {
+        // Strict: Crash just before user's auto-cashout target
+        const crashBefore = +(minAutoCashout - 0.05 - Math.random() * 0.08).toFixed(2);
+        return Math.min(1.18, Math.max(1.01, crashBefore));
+      }
+      const earlyCrash = +(1.02 + Math.random() * 0.15).toFixed(2); // 1.02x to 1.17x
+      return Math.min(1.18, Math.max(1.01, earlyCrash));
+    }
+
+    if (isCloseToProfit) {
+      // User is nearing deposit amount: limit multiplier strictly so they don't surpass admin
+      if (minAutoCashout !== null && minAutoCashout >= 1.25) {
+        return Math.min(1.20, +(1.03 + Math.random() * 0.16).toFixed(2));
+      }
+      const rand = Math.random();
+      if (rand < 0.75) {
+        return +(1.03 + Math.random() * 0.17).toFixed(2);
+      }
+      return +(1.22 + Math.random() * 0.18).toFixed(2);
+    }
+
+    // Standard Real Deposit Distribution (Realistic fair distribution when user is behind/negative)
     const rand = Math.random();
     let point = 1.0;
-    if (rand < 0.05) point = +(1.0 + Math.random() * 0.08).toFixed(2);
-    else if (rand < 0.45) point = +(1.1 + Math.random() * 1.0).toFixed(2);
-    else if (rand < 0.80) point = +(2.1 + Math.random() * 4.4).toFixed(2);
-    else if (rand < 0.94) point = +(6.5 + Math.random() * 15.5).toFixed(2);
-    else point = +(22.0 + Math.random() * 78.0).toFixed(2); // up to 100.00x!
+    if (rand < 0.12) point = +(1.0 + Math.random() * 0.12).toFixed(2);
+    else if (rand < 0.55) point = +(1.15 + Math.random() * 0.9).toFixed(2);
+    else if (rand < 0.85) point = +(2.1 + Math.random() * 3.4).toFixed(2);
+    else if (rand < 0.96) point = +(5.5 + Math.random() * 12.0).toFixed(2);
+    else point = +(18.0 + Math.random() * 55.0).toFixed(2); // up to 100.00x!
 
     return Math.min(100.00, Math.max(1.00, point));
   }, []);
@@ -1371,29 +1417,68 @@ export default function App() {
     setIsAuthOpen(true);
   }, []);
 
-  // Guarded Deposit & Withdraw handlers (Strict: Must have an account!)
+  // Check active account suspension status (Requirement 3: Temporary suspension or Permanent ban)
+  const suspensionInfo = checkAccountSuspensionStatus(userProfile || currentUser);
+
+  const handleLogoutAccount = useCallback(() => {
+    soundManager.playClick();
+    logoutPhoneSession();
+    setCurrentUser(null);
+    setUserProfile(null);
+    setBalance(0);
+    setIsSideDrawerOpen(false);
+  }, []);
+
+  // Guarded Deposit & Withdraw handlers (Strict: Must have an account and not be suspended!)
   const handleOpenDeposit = useCallback(() => {
     if (!currentUser) {
       handleRequireAuth('এড মানি (রিচার্জ) করতে হলে প্রথমে আপনার একটি একাউন্ট তৈরি বা লগইন করতে হবে!');
       return;
     }
+    if (suspensionInfo.isDeactivated) {
+      soundManager.playCrash();
+      setUserAlertToast({
+        title: suspensionInfo.isBanned ? 'একাউন্ট ব্যান করা হয়েছে' : 'একাউন্ট সাময়িকভাবে স্থগিত',
+        message: suspensionInfo.reason || 'আপনার একাউন্টটির কার্যক্রম স্থগিত রাখা হয়েছে।',
+        type: 'error',
+      });
+      return;
+    }
     setWalletTab('deposit');
     setIsDepositOpen(true);
-  }, [currentUser, handleRequireAuth]);
+  }, [currentUser, suspensionInfo, handleRequireAuth]);
 
   const handleOpenWithdraw = useCallback(() => {
     if (!currentUser) {
       handleRequireAuth('টাকা উইথড্র করতে হলে প্রথমে আপনার একটি একাউন্ট তৈরি বা লগইন করতে হবে!');
       return;
     }
+    if (suspensionInfo.isDeactivated) {
+      soundManager.playCrash();
+      setUserAlertToast({
+        title: suspensionInfo.isBanned ? 'একাউন্ট ব্যান করা হয়েছে' : 'একাউন্ট সাময়িকভাবে স্থগিত',
+        message: suspensionInfo.reason || 'আপনার একাউন্টটির কার্যক্রম স্থগিত রাখা হয়েছে।',
+        type: 'error',
+      });
+      return;
+    }
     setWalletTab('withdraw');
     setIsDepositOpen(true);
-  }, [currentUser, handleRequireAuth]);
+  }, [currentUser, suspensionInfo, handleRequireAuth]);
 
-  // Place Bet actions (Strict: No bets allowed without an account!)
+  // Place Bet actions (Strict: No bets allowed without an account or if deactivated!)
   const handlePlaceBetPanel1 = (amount: number) => {
     if (!currentUser) {
       handleRequireAuth('বেট ধরার জন্য আপনাকে অবশ্যই একাউন্ট তৈরি বা লগইন করতে হবে!');
+      return;
+    }
+    if (suspensionInfo.isDeactivated) {
+      soundManager.playCrash();
+      setUserAlertToast({
+        title: suspensionInfo.isBanned ? 'একাউন্ট ব্যান' : 'একাউন্ট স্থগিত',
+        message: suspensionInfo.reason || 'স্থগিত থাকা অবস্থায় বাজি ধরা যাবে না।',
+        type: 'error',
+      });
       return;
     }
     if (roundStatus !== 'WAITING') return; // Strict: No bets allowed during flight or crash!
@@ -1415,6 +1500,15 @@ export default function App() {
   const handlePlaceBetPanel2 = (amount: number) => {
     if (!currentUser) {
       handleRequireAuth('বেট ধরার জন্য আপনাকে অবশ্যই একাউন্ট তৈরি বা লগইন করতে হবে!');
+      return;
+    }
+    if (suspensionInfo.isDeactivated) {
+      soundManager.playCrash();
+      setUserAlertToast({
+        title: suspensionInfo.isBanned ? 'একাউন্ট ব্যান' : 'একাউন্ট স্থগিত',
+        message: suspensionInfo.reason || 'স্থগিত থাকা অবস্থায় বাজি ধরা যাবে না।',
+        type: 'error',
+      });
       return;
     }
     if (roundStatus !== 'WAITING') return; // Strict: No bets allowed during flight or crash!
@@ -1463,9 +1557,16 @@ export default function App() {
   }, []);
 
   const handleOpenAdminPanelWithTab = (tab?: 'requests' | 'withdrawals') => {
+    if (!isUserAdminAccount(currentUser?.phoneNumber)) return;
     if (tab) setAdminPanelInitialTab(tab);
     setIsAdminOpen(true);
   };
+
+  useEffect(() => {
+    if (!isUserAdminAccount(currentUser?.phoneNumber) && isAdminOpen) {
+      setIsAdminOpen(false);
+    }
+  }, [currentUser?.phoneNumber, isAdminOpen]);
 
   // Clean Native-like App Closed Screen (like Facebook, YouTube exit on phone)
   if (isAppClosed) {
@@ -1531,7 +1632,11 @@ export default function App() {
           onOpenDeposit={handleOpenDeposit}
           onOpenWithdraw={handleOpenWithdraw}
           onOpenRules={() => setIsRulesOpen(true)}
-          onOpenAdmin={() => setIsAdminOpen(true)}
+          onOpenAdmin={() => {
+            if (isUserAdminAccount(currentUser?.phoneNumber)) {
+              setIsAdminOpen(true);
+            }
+          }}
           onOpenBonusHub={() => setIsBonusHubOpen(true)}
           hasUnclaimedBonus={hasUnclaimedBonus}
           pendingDepositCount={pendingDepositCount}
@@ -1757,7 +1862,8 @@ export default function App() {
       />
 
       <AdminPanel
-        isOpen={isAdminOpen}
+        isOpen={isAdminOpen && isUserAdminAccount(currentUser?.phoneNumber)}
+        currentUserPhone={currentUser?.phoneNumber}
         onClose={() => setIsAdminOpen(false)}
         initialTab={adminPanelInitialTab}
         onBalanceAdjusted={() => {
@@ -1799,7 +1905,11 @@ export default function App() {
         onOpenDeposit={handleOpenDeposit}
         onOpenWithdraw={handleOpenWithdraw}
         onOpenRules={() => setIsRulesOpen(true)}
-        onOpenAdmin={() => setIsAdminOpen(true)}
+        onOpenAdmin={() => {
+          if (isUserAdminAccount(currentUser?.phoneNumber)) {
+            setIsAdminOpen(true);
+          }
+        }}
         isPredictorOpen={isPredictorOpen}
         onTogglePredictor={() => setIsPredictorOpen((prev) => !prev)}
         isMuted={isMuted}
@@ -1851,6 +1961,49 @@ export default function App() {
         onClose={() => setIsExitModalOpen(false)}
         onConfirmExit={handleExitApp}
       />
+
+      {/* Account Deactivation / Suspension Live Overlay Modal (Requirement 3) */}
+      {Boolean(currentUser && suspensionInfo.isDeactivated) && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/92 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="bg-[#120a0d] border-2 border-rose-500/70 rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl text-center space-y-4">
+            <div className="w-16 h-16 rounded-full bg-rose-500/20 border-2 border-rose-500/50 text-rose-400 mx-auto flex items-center justify-center shadow-lg">
+              <Ban className="w-8 h-8 stroke-[2.5]" />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-black text-white">
+                {suspensionInfo.isBanned ? '🚫 একাউন্ট স্থায়ীভাবে ব্যান করা হয়েছে' : '⏳ একাউন্ট সাময়িকভাবে স্থগিত'}
+              </h3>
+              <p className="text-xs text-rose-200/90 mt-2 leading-relaxed">
+                {suspensionInfo.reason || 'নিয়ম লঙ্ঘনের কারণে আপনার অ্যাকাউন্টটির কার্যক্রম স্থগিত রাখা হয়েছে।'}
+              </p>
+            </div>
+
+            {suspensionInfo.isSuspended && suspensionInfo.suspendedUntil && (
+              <div className="bg-[#1d0e14] border border-rose-500/30 rounded-xl p-3 text-xs text-amber-300 font-mono">
+                স্থগিতাদেশের মেয়াদ শেষ হবে:
+                <span className="font-bold text-white block mt-0.5">
+                  {new Date(suspensionInfo.suspendedUntil).toLocaleString('bn-BD', { dateStyle: 'short', timeStyle: 'short' })}
+                </span>
+                {suspensionInfo.remainingMinutes !== undefined && (
+                  <span className="text-[11px] text-amber-400 block mt-1">
+                    (বাকি আনুমানিক {Math.ceil(suspensionInfo.remainingMinutes / 60)} ঘণ্টা বা {suspensionInfo.remainingMinutes} মিনিট)
+                  </span>
+                )}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleLogoutAccount}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-rose-900/40 flex items-center justify-center gap-2 active:scale-95"
+            >
+              <LogOut className="w-4 h-4 font-bold" />
+              <span>লগআউট করুন</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 1-Second Initial Mobile Splash Screen */}
       {showSplash && (

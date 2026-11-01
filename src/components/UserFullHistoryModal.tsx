@@ -80,13 +80,27 @@ export const UserFullHistoryModal: React.FC<UserFullHistoryModalProps> = ({
               <UserIcon className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-base sm:text-lg font-bold text-white leading-tight">
                   {user.displayName}
                 </h3>
                 <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-mono text-xs font-bold border border-amber-500/30">
                   {user.userCode}
                 </span>
+
+                {user.status === 'banned' ? (
+                  <span className="px-2 py-0.5 rounded-md bg-rose-500/25 text-rose-300 text-xs font-bold border border-rose-500/40">
+                    🚫 স্থায়ী ব্যান (Banned)
+                  </span>
+                ) : user.status === 'suspended' && user.suspendedUntil && new Date(user.suspendedUntil).getTime() > Date.now() ? (
+                  <span className="px-2 py-0.5 rounded-md bg-amber-500/25 text-amber-300 text-xs font-bold border border-amber-500/40">
+                    ⏳ সাময়িক স্থগিত (Suspended)
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-500/25 text-emerald-300 text-xs font-bold border border-emerald-500/40">
+                    ✓ সক্রিয় (Active)
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400 font-mono mt-0.5">
                 মোবাইল: +88 {user.phoneNumber} | জয়েন: {new Date(user.createdAt).toLocaleDateString('bn-BD')}
@@ -103,7 +117,7 @@ export const UserFullHistoryModal: React.FC<UserFullHistoryModalProps> = ({
                 }}
                 className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
               >
-                একাউন্ট এডিট
+                একাউন্ট এডিট / স্ট্যাটাস
               </button>
             )}
             <button
@@ -114,6 +128,24 @@ export const UserFullHistoryModal: React.FC<UserFullHistoryModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Deactivation Banner if Suspended or Banned */}
+        {(user.status === 'banned' || (user.status === 'suspended' && user.suspendedUntil && new Date(user.suspendedUntil).getTime() > Date.now())) && (
+          <div className="px-4 py-2.5 bg-rose-950/60 border-b border-rose-600/40 flex items-center justify-between text-xs text-rose-200">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>
+                <strong>{user.status === 'banned' ? 'স্থায়ী ব্যান:' : 'সাময়িক স্থগিতাদেশ:'}</strong>{' '}
+                {user.deactivationReason || 'এডমিন কর্তৃক স্থগিত'}
+              </span>
+            </div>
+            {user.suspendedUntil && user.status === 'suspended' && (
+              <span className="font-mono text-[11px] text-amber-300">
+                মেয়াদ: {new Date(user.suspendedUntil).toLocaleString('bn-BD', { dateStyle: 'short', timeStyle: 'short' })}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Top Summary Stats Cards */}
         <div className="p-3 sm:p-4 bg-[#0a0f18] border-b border-[#1a2539] grid grid-cols-2 sm:grid-cols-4 gap-2 shrink-0">
@@ -129,6 +161,9 @@ export const UserFullHistoryModal: React.FC<UserFullHistoryModalProps> = ({
             <span className="text-base font-black font-mono text-emerald-400">
               ৳ {user.withdrawableBalance.toLocaleString()}
             </span>
+            {user.withdrawableBalance === 0 && (summary.totalDepositedAmount <= 0) && (
+              <span className="text-[9px] text-rose-400 block">ডিপোজিট নেই (উইথড্র ব্লক)</span>
+            )}
           </div>
 
           <div className="bg-[#121927] p-2.5 rounded-xl border border-[#1e2a3f]">
@@ -136,6 +171,11 @@ export const UserFullHistoryModal: React.FC<UserFullHistoryModalProps> = ({
             <span className="text-base font-black font-mono text-amber-300">
               ৳ {summary.totalDepositedAmount.toLocaleString()}
             </span>
+            {summary.totalDepositedAmount > 0 ? (
+              <span className="text-[9px] text-emerald-400 block">✓ ভেরিফাইড ডিপোজিটর</span>
+            ) : (
+              <span className="text-[9px] text-rose-400 block">০ ডিপোজিট</span>
+            )}
           </div>
 
           <div className="bg-[#121927] p-2.5 rounded-xl border border-[#1e2a3f]">

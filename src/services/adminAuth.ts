@@ -1,106 +1,76 @@
 // src/services/adminAuth.ts
-// Secure Admin Access & Stealth Management System
-// Ensures normal players never see or access the Admin section,
-// while giving the website owner 4 convenient stealth entry methods.
+// Secure Admin Access & Authorization System
+// STRICT REQUIREMENT: Only the account holder with phone number 01743224700 can see or access the Admin section.
+// No other player will receive any clue, notification, or hint of the admin section.
 
-const ADMIN_MODE_KEY = 'aviator_admin_stealth_mode_v1';
-const ADMIN_PHONE_KEY = 'aviator_admin_registered_phone_v1';
-
-// Default owner phone (01743224700 as specified by admin)
-export const DEFAULT_ADMIN_PHONE = '01743224700';
+export const ADMIN_PHONE_NUMBER = '01743224700';
 
 /**
- * Checks if the Admin mode is currently revealed on this device/browser.
- * By default, this is FALSE for all public visitors.
+ * Normalizes phone number to digits only
  */
-export function isPublicAdminVisible(): boolean {
-  if (typeof window === 'undefined') return false;
-
-  try {
-    // 1. Check URL parameters: e.g. ?admin=true or ?admin=1 or #admin
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('admin') === 'true' || urlParams.get('admin') === '1' || urlParams.get('secret') === 'admin') {
-      localStorage.setItem(ADMIN_MODE_KEY, 'true');
-      return true;
-    }
-    if (window.location.hash.toLowerCase() === '#admin') {
-      localStorage.setItem(ADMIN_MODE_KEY, 'true');
-      return true;
-    }
-
-    // 2. Check local persistence
-    return localStorage.getItem(ADMIN_MODE_KEY) === 'true';
-  } catch {
-    return false;
-  }
+export function cleanDigits(phone?: string | null): string {
+  if (!phone) return '';
+  return phone.replace(/[^0-9]/g, '');
 }
 
 /**
- * Toggle Admin mode on or off for the current browser
+ * Check if a logged in user is the strictly designated admin/owner (01743224700)
  */
-export function setAdminVisible(visible: boolean): void {
-  try {
-    if (visible) {
-      localStorage.setItem(ADMIN_MODE_KEY, 'true');
-    } else {
-      localStorage.removeItem(ADMIN_MODE_KEY);
-      // Clean up URL if ?admin=true was present
-      if (window.location.search.includes('admin=')) {
-        const url = new URL(window.location.href);
-        url.searchParams.delete('admin');
-        window.history.replaceState({}, '', url.toString());
-      }
-      if (window.location.hash.toLowerCase() === '#admin') {
-        window.history.replaceState({}, '', window.location.pathname + window.location.search);
-      }
-    }
-    window.dispatchEvent(new CustomEvent('admin_mode_changed', { detail: { visible } }));
-  } catch (e) {
-    console.error('Failed to set admin visibility:', e);
-  }
+export function isUserAdminAccount(userPhone?: string | null): boolean {
+  if (!userPhone) return false;
+  const digits = cleanDigits(userPhone);
+  if (!digits) return false;
+  return digits === ADMIN_PHONE_NUMBER || digits.endsWith(ADMIN_PHONE_NUMBER);
 }
 
 /**
- * Toggle visibility and return new state
+ * Checks if admin mode is visible for the current user phone.
+ * STRICT: Only returns true if the user phone is 01743224700.
  */
-export function toggleAdminVisibility(): boolean {
-  const current = isPublicAdminVisible();
-  const next = !current;
-  setAdminVisible(next);
-  return next;
+export function isPublicAdminVisible(userPhone?: string | null): boolean {
+  return isUserAdminAccount(userPhone);
 }
 
 /**
- * Get registered owner phone number
+ * Get registered owner phone number (Fixed to 01743224700)
  */
 export function getRegisteredAdminPhone(): string {
-  try {
-    return localStorage.getItem(ADMIN_PHONE_KEY) || DEFAULT_ADMIN_PHONE;
-  } catch {
-    return DEFAULT_ADMIN_PHONE;
-  }
+  return ADMIN_PHONE_NUMBER;
 }
 
 /**
  * Save registered owner phone number
  */
 export function saveRegisteredAdminPhone(phone: string): void {
+  // Maintained for backward compatibility, keeps 01743224700 as primary
   try {
-    const clean = phone.replace(/[^0-9]/g, '');
-    localStorage.setItem(ADMIN_PHONE_KEY, clean || DEFAULT_ADMIN_PHONE);
+    const clean = cleanDigits(phone);
+    if (clean) {
+      localStorage.setItem('aviator_admin_registered_phone_v1', clean);
+    }
   } catch {}
 }
 
 /**
- * Check if a logged in user is the designated admin/owner
+ * Toggle Admin mode (Only permitted for 01743224700)
  */
-export function isUserAdminAccount(userPhone?: string | null): boolean {
-  if (!userPhone) return false;
-  const cleanUser = userPhone.replace(/[^0-9]/g, '');
-  const registered = (getRegisteredAdminPhone() || DEFAULT_ADMIN_PHONE).replace(/[^0-9]/g, '');
-  
-  if (cleanUser.endsWith('01743224700') || (registered && cleanUser.endsWith(registered))) {
-    return true;
+export function setAdminVisible(visible: boolean, userPhone?: string | null): void {
+  if (!isUserAdminAccount(userPhone)) {
+    // Non-admin users are strictly blocked from setting admin mode
+    try {
+      localStorage.removeItem('aviator_admin_stealth_mode_v1');
+    } catch {}
+    return;
   }
-  return false;
+
+  try {
+    if (visible) {
+      localStorage.setItem('aviator_admin_stealth_mode_v1', 'true');
+    } else {
+      localStorage.removeItem('aviator_admin_stealth_mode_v1');
+    }
+    window.dispatchEvent(new CustomEvent('admin_mode_changed', { detail: { visible } }));
+  } catch (e) {
+    console.error('Failed to set admin visibility:', e);
+  }
 }

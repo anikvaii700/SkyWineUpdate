@@ -58,6 +58,9 @@ export interface UserWalletProfile {
   referredBy?: string;
   referralCount?: number;
   referralBonusEarned?: number;
+  status?: 'active' | 'suspended' | 'banned';
+  suspendedUntil?: string | null;
+  deactivationReason?: string | null;
   createdAt: string;
   updatedAt: string;
 }

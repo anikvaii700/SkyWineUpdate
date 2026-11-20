@@ -31,8 +31,11 @@ export interface StoredPhoneAccount {
   rewardBonusEarned?: number;
   referralCode: string; // User's referral code (same as userCode)
   referredBy?: string; // Referrer's userCode
+  referredByUid?: string; // Referrer's UID
   referralCount: number; // Total friends invited
-  referralBonusEarned: number; // ৳ 50 * referralCount
+  referralBonusEarned: number; // Cumulative 100% invite bonus earned from invited friends' first deposits
+  inviteBonusBalance?: number; // Active non-withdrawable, non-profitable invite bonus balance
+  firstDepositReferralRewarded?: boolean; // True once referrer has received 100% invite bonus for this user's first deposit
   status?: 'active' | 'suspended' | 'banned'; // active, suspended (temporary), banned (permanent)
   suspendedUntil?: string | null; // ISO timestamp for temporary suspension expiration
   deactivationReason?: string | null; // Reason why user was deactivated
@@ -88,11 +91,17 @@ export function checkAccountSuspensionStatus(account?: {
 
 export interface ReferralRecord {
   id: string;
+  referrerUid?: string;
   referrerCode: string;
+  referredUid?: string;
   referredUserCode: string;
   referredPhone: string;
+  referredName?: string;
+  firstDepositAmount?: number;
   bonusAmount: number;
+  status?: 'pending_deposit' | 'rewarded';
   createdAt: string;
+  rewardedAt?: string;
 }
 
 const STORAGE_ACCOUNTS_KEY = 'aviator_phone_accounts_v1';
@@ -173,9 +182,17 @@ export function getStoredPhoneAccounts(): Record<string, StoredPhoneAccount> {
         acc.referralBonusEarned = 0;
         hasChanges = true;
       }
-      // Rule: Only referral commission cannot be withdrawn. Cash-in and earnings CAN be cashed out!
-      if (acc.lockedPrincipal !== (acc.referralBonusEarned || 0)) {
-        acc.lockedPrincipal = acc.referralBonusEarned || 0;
+      if (acc.inviteBonusBalance === undefined) {
+        acc.inviteBonusBalance = acc.referralBonusEarned || 0;
+        hasChanges = true;
+      }
+      const minLocked =
+        (acc.initialBonus !== undefined ? acc.initialBonus : 100) +
+        (acc.inviteBonusBalance || 0) +
+        (acc.firstDepositBonusEarned || 0) +
+        (acc.rewardBonusEarned || 0);
+      if (acc.lockedPrincipal === undefined || acc.lockedPrincipal < minLocked) {
+        acc.lockedPrincipal = minLocked;
         hasChanges = true;
       }
       if (acc.totalDeposited === undefined) {
@@ -215,6 +232,15 @@ export async function registerPhoneAccount(
   fullName?: string,
   referralCodeInput?: string
 ): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string; referralBonusApplied?: boolean }> {
+  const { getStoredAppControls } = await import('./appControlService');
+  const appControls = getStoredAppControls();
+  if (!appControls.registrationEnabled) {
+    return {
+      success: false,
+      error: 'নতুন একাউন্ট রেজিস্ট্রেশন সাময়িকভাবে এডমিন কর্তৃক বন্ধ রাখা হয়েছে। কিছুক্ষণ পর চেষ্টা করুন।',
+    };
+  }
+
   const { cleanPhone, displayPhone } = normalizePhoneNumber(rawPhone);
 
   if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
@@ -267,60 +293,40 @@ export async function registerPhoneAccount(
   const displayName = fullName?.trim() || `User ${displayPhone}`;
   const userCode = generateUniqueUserCode(accounts);
 
-  // New account receives ৳ 100 starting balance
-  const initialWelcomeBalance = 100;
+  // New account receives admin-configured starting welcome balance (default ৳ 100)
+  const initialWelcomeBalance = Math.max(0, Math.round(Number(appControls.signupBonusAmount ?? 100)));
 
-  // Check and process referral code if provided
+  // Check and link referral code if provided (cross-device Firestore + localStorage lookup)
+  // 100% Invite Bonus Rule: Referrer receives 100% of this invited user's first deposit when approved!
   let referralBonusApplied = false;
   let referrerCode: string | undefined = undefined;
+  let referrerUid: string | undefined = undefined;
 
-  if (referralCodeInput && referralCodeInput.trim()) {
-    const cleanRefInput = referralCodeInput.trim().toUpperCase();
-    // Look for matching referrer
-    for (const phoneKey of Object.keys(accounts)) {
-      const existing = accounts[phoneKey];
-      if (
-        existing.phoneNumber !== cleanPhone &&
-        (existing.userCode.toUpperCase() === cleanRefInput ||
-          existing.referralCode.toUpperCase() === cleanRefInput ||
-          existing.phoneNumber === cleanRefInput ||
-          cleanRefInput.endsWith(existing.phoneNumber.slice(-5)))
-      ) {
-        referrerCode = existing.userCode;
-        // Credit ৳ 50 bonus commission to referrer!
-        // Referrer can play with this ৳ 50, but cannot cash it out directly
-        existing.balance = (existing.balance || 0) + 50;
-        existing.lockedPrincipal = (existing.lockedPrincipal || 0) + 50;
-        existing.referralCount = (existing.referralCount || 0) + 1;
-        existing.referralBonusEarned = (existing.referralBonusEarned || 0) + 50;
-        existing.updatedAt = now;
-
-        // Save referral record
-        saveReferralRecord({
-          id: `ref_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          referrerCode: existing.userCode,
+  if (referralCodeInput && referralCodeInput.trim().length >= 3) {
+    try {
+      const { findReferrerByCode, registerReferralLinkage, clearPendingReferralCode } = await import('./referralService');
+      const matchedReferrer = await findReferrerByCode(referralCodeInput, uid, cleanPhone);
+      if (matchedReferrer) {
+        referrerCode = matchedReferrer.userCode;
+        referrerUid = matchedReferrer.uid;
+        await registerReferralLinkage({
+          referrerUid: matchedReferrer.uid,
+          referrerCode: matchedReferrer.userCode,
+          referredUid: uid,
           referredUserCode: userCode,
           referredPhone: cleanPhone,
-          bonusAmount: 50,
-          createdAt: now,
+          referredName: displayName,
         });
-
-        // Also update referrer in Firestore
-        try {
-          updateDoc(doc(db, 'users', existing.uid), {
-            balance: existing.balance,
-            lockedPrincipal: existing.lockedPrincipal,
-            referralCount: existing.referralCount,
-            referralBonusEarned: existing.referralBonusEarned,
-            updatedAt: now,
-          }).catch(() => {});
-        } catch {}
-
+        clearPendingReferralCode();
         referralBonusApplied = true;
-        break;
       }
+    } catch (refErr) {
+      console.warn('Referral linkage check failed:', refErr);
     }
   }
+
+  // Reload accounts in case registerReferralLinkage updated referrer's referralCount locally
+  const latestAccounts = getStoredPhoneAccounts();
 
   const newAccount: StoredPhoneAccount = {
     uid,
@@ -330,18 +336,21 @@ export async function registerPhoneAccount(
     displayName,
     balance: initialWelcomeBalance, // ৳ 100 starting balance
     initialBonus: initialWelcomeBalance,
-    lockedPrincipal: 0,
+    lockedPrincipal: initialWelcomeBalance,
     totalDeposited: 0,
     referralCode: userCode,
     referredBy: referrerCode,
+    referredByUid: referrerUid,
     referralCount: 0,
     referralBonusEarned: 0,
+    inviteBonusBalance: 0,
+    firstDepositReferralRewarded: false,
     createdAt: now,
     updatedAt: now,
   };
 
-  accounts[cleanPhone] = newAccount;
-  saveStoredPhoneAccounts(accounts);
+  latestAccounts[cleanPhone] = newAccount;
+  saveStoredPhoneAccounts(latestAccounts);
 
   // Sync account to Firestore users collection for online cloud access
   try {
@@ -355,12 +364,15 @@ export async function registerPhoneAccount(
       displayName,
       balance: initialWelcomeBalance,
       initialBonus: initialWelcomeBalance,
-      lockedPrincipal: 0,
+      lockedPrincipal: initialWelcomeBalance,
       totalDeposited: 0,
       referralCode: userCode,
       referredBy: referrerCode || '',
+      referredByUid: referrerUid || '',
       referralCount: 0,
       referralBonusEarned: 0,
+      inviteBonusBalance: 0,
+      firstDepositReferralRewarded: false,
       provider: 'phone',
       createdAt: now,
       updatedAt: now,
@@ -398,8 +410,11 @@ export async function registerPhoneAccount(
     hasDeposited: false,
     referralCode: userCode,
     referredBy: referrerCode,
+    referredByUid: referrerUid,
     referralCount: 0,
     referralBonusEarned: 0,
+    inviteBonusBalance: 0,
+    firstDepositReferralRewarded: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -439,8 +454,11 @@ export async function loginPhoneAccount(
             totalDeposited: typeof d.totalDeposited === 'number' ? d.totalDeposited : 0,
             referralCode: d.referralCode || d.userCode || `USER-${cleanPhone.slice(-5)}`,
             referredBy: d.referredBy || undefined,
+            referredByUid: d.referredByUid || undefined,
             referralCount: d.referralCount || 0,
             referralBonusEarned: d.referralBonusEarned || 0,
+            inviteBonusBalance: typeof d.inviteBonusBalance === 'number' ? d.inviteBonusBalance : (d.referralBonusEarned || 0),
+            firstDepositReferralRewarded: Boolean(d.firstDepositReferralRewarded),
             createdAt: d.createdAt || new Date().toISOString(),
             updatedAt: d.updatedAt || new Date().toISOString(),
           };
@@ -467,7 +485,7 @@ export async function loginPhoneAccount(
     };
   }
 
-  // Fetch latest balance from Firestore if online
+  // Fetch latest balance & invite bonus data from Firestore if online
   try {
     const snap = await getDoc(doc(db, 'users', account.uid));
     if (snap.exists()) {
@@ -476,6 +494,11 @@ export async function loginPhoneAccount(
         account.balance = d.balance;
         if (typeof d.lockedPrincipal === 'number') account.lockedPrincipal = d.lockedPrincipal;
         if (typeof d.totalDeposited === 'number') account.totalDeposited = d.totalDeposited;
+        if (typeof d.referralCount === 'number') account.referralCount = d.referralCount;
+        if (typeof d.referralBonusEarned === 'number') account.referralBonusEarned = d.referralBonusEarned;
+        if (typeof d.inviteBonusBalance === 'number') account.inviteBonusBalance = d.inviteBonusBalance;
+        if (typeof d.firstDepositBonusEarned === 'number') account.firstDepositBonusEarned = d.firstDepositBonusEarned;
+        if (d.hasDeposited !== undefined) account.hasDeposited = Boolean(d.hasDeposited);
         accounts[cleanPhone] = account;
         saveStoredPhoneAccounts(accounts);
       }
@@ -526,8 +549,13 @@ export async function loginPhoneAccount(
     totalDeposited: account.totalDeposited || 0,
     referralCode: account.referralCode || account.userCode,
     referredBy: account.referredBy,
+    referredByUid: account.referredByUid,
     referralCount: account.referralCount || 0,
     referralBonusEarned: account.referralBonusEarned || 0,
+    inviteBonusBalance: account.inviteBonusBalance !== undefined ? account.inviteBonusBalance : (account.referralBonusEarned || 0),
+    firstDepositReferralRewarded: Boolean(account.firstDepositReferralRewarded),
+    firstDepositBonusEarned: account.firstDepositBonusEarned || 0,
+    hasDeposited: Boolean(account.hasDeposited || (account.totalDeposited && account.totalDeposited > 0)),
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
   };
@@ -567,11 +595,15 @@ export function getActivePhoneSession(): { user: AppUser; profile: UserWalletPro
         initialBonus: account.initialBonus || 100,
         lockedPrincipal: account.lockedPrincipal !== undefined ? account.lockedPrincipal : account.balance,
         totalDeposited: account.totalDeposited || 0,
+        firstDepositBonusEarned: account.firstDepositBonusEarned || 0,
         hasDeposited: Boolean(account.hasDeposited || (account.totalDeposited && account.totalDeposited > 0)),
         referralCode: account.referralCode || account.userCode,
         referredBy: account.referredBy,
+        referredByUid: account.referredByUid,
         referralCount: account.referralCount || 0,
         referralBonusEarned: account.referralBonusEarned || 0,
+        inviteBonusBalance: account.inviteBonusBalance !== undefined ? account.inviteBonusBalance : (account.referralBonusEarned || 0),
+        firstDepositReferralRewarded: Boolean(account.firstDepositReferralRewarded),
         status: account.status || 'active',
         suspendedUntil: account.suspendedUntil,
         deactivationReason: account.deactivationReason,

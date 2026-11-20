@@ -56,8 +56,11 @@ export interface UserWalletProfile {
   rewardBonusEarned?: number;
   referralCode?: string;
   referredBy?: string;
+  referredByUid?: string;
   referralCount?: number;
   referralBonusEarned?: number;
+  inviteBonusBalance?: number; // Active non-withdrawable, non-profitable 100% invite bonus balance
+  firstDepositReferralRewarded?: boolean;
   status?: 'active' | 'suspended' | 'banned';
   suspendedUntil?: string | null;
   deactivationReason?: string | null;
@@ -172,7 +175,8 @@ export async function getOrCreateUserProfile(
   user: FirebaseUser,
   initialBalance = 0,
   fallbackPhone?: string,
-  fallbackName?: string
+  fallbackName?: string,
+  referralCodeInput?: string
 ): Promise<UserWalletProfile> {
   const userRef = doc(db, 'users', user.uid);
   const snap = await getDoc(userRef);
@@ -226,21 +230,52 @@ export async function getOrCreateUserProfile(
   const now = new Date().toISOString();
   const generatedCode = `USER-${Math.floor(10000 + Math.random() * 90000)}`;
   const startingBalance = typeof initialBalance === 'number' && !isNaN(initialBalance) && initialBalance > 0 ? initialBalance : 100;
+  const displayName = user.displayName || fallbackName || 'Player';
+  const phoneNum = user.phoneNumber || fallbackPhone || '';
+
+  // Link referrer if signed up via referral link or referral code (100% Invite Bonus awarded on first deposit)
+  let referredBy: string | undefined = undefined;
+  let referredByUid: string | undefined = undefined;
+  if (referralCodeInput && referralCodeInput.trim().length >= 3) {
+    try {
+      const { findReferrerByCode, registerReferralLinkage, clearPendingReferralCode } = await import('./referralService');
+      const referrer = await findReferrerByCode(referralCodeInput, user.uid, phoneNum);
+      if (referrer) {
+        referredBy = referrer.userCode;
+        referredByUid = referrer.uid;
+        await registerReferralLinkage({
+          referrerUid: referrer.uid,
+          referrerCode: referrer.userCode,
+          referredUid: user.uid,
+          referredUserCode: generatedCode,
+          referredPhone: phoneNum,
+          referredName: displayName,
+        });
+        clearPendingReferralCode();
+      }
+    } catch (refErr) {
+      console.warn('Could not link referral on Google signup:', refErr);
+    }
+  }
 
   const rawProfile: Record<string, unknown> = {
     id: user.uid,
     userCode: generatedCode,
     email: user.email || '',
-    displayName: user.displayName || fallbackName || 'Player',
+    displayName,
     photoURL: user.photoURL || '',
-    phoneNumber: user.phoneNumber || fallbackPhone || '',
+    phoneNumber: phoneNum,
     balance: startingBalance,
     initialBonus: 100,
     lockedPrincipal: startingBalance,
     totalDeposited: 0,
     referralCode: generatedCode,
+    referredBy: referredBy || '',
+    referredByUid: referredByUid || '',
     referralCount: 0,
     referralBonusEarned: 0,
+    inviteBonusBalance: 0,
+    firstDepositReferralRewarded: false,
     createdAt: now,
     updatedAt: now,
   };

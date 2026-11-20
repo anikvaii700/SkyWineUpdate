@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   LogIn,
@@ -23,8 +23,9 @@ import {
   Gift,
   Share2,
   AlertCircle,
+  Link2,
 } from 'lucide-react';
-import { calculateWithdrawableBalance } from '../services/userManagement';
+import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../services/userManagement';
 import {
   signInWithGoogle,
   logoutUser as firebaseLogout,
@@ -39,6 +40,7 @@ import {
   logoutPhoneSession,
   normalizePhoneNumber,
 } from '../services/phoneAuth';
+import { buildReferralLink, getPendingReferralCode } from '../services/referralService';
 import { soundManager } from '../services/audio';
 
 interface AuthModalProps {
@@ -77,10 +79,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [referralCodeInput, setReferralCodeInput] = useState('');
+  const [referralCodeInput, setReferralCodeInput] = useState(() => getPendingReferralCode());
+  const [hasAutoCapturedRef, setHasAutoCapturedRef] = useState(() => Boolean(getPendingReferralCode()));
   const [showPassword, setShowPassword] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedReferral, setCopiedReferral] = useState(false);
+  const [copiedRefLink, setCopiedRefLink] = useState(false);
 
   // Phone editing for logged-in user
   const [isEditingPhone, setIsEditingPhone] = useState(false);
@@ -90,6 +94,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Sync any pending ?ref= referral code when modal opens
+  useEffect(() => {
+    if (isOpen && !currentUser) {
+      const pending = getPendingReferralCode();
+      if (pending) {
+        setReferralCodeInput(pending);
+        setHasAutoCapturedRef(true);
+        setAuthMode('signup');
+      }
+    }
+  }, [isOpen, currentUser]);
 
   if (!isOpen) return null;
 
@@ -102,10 +118,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       const fbUser = await signInWithGoogle();
       if (fbUser) {
-        const profile = await getOrCreateUserProfile(fbUser, 100);
+        const refToApply = referralCodeInput.trim() || getPendingReferralCode();
+        const profile = await getOrCreateUserProfile(fbUser, 100, undefined, undefined, refToApply);
         const appUser: AppUser = {
           uid: fbUser.uid,
           userCode: profile.userCode,
+          referralCode: profile.referralCode || profile.userCode,
           displayName: fbUser.displayName || 'Google Player',
           email: fbUser.email,
           phoneNumber: profile.phoneNumber || fbUser.phoneNumber || null,
@@ -379,10 +397,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {(() => {
                 const userCode = userProfile?.userCode || currentUser.userCode || `USER-${currentUser.uid.slice(-5)}`;
                 const balance = userProfile?.balance || 0;
-                const locked = userProfile?.referralBonusEarned || 0;
-                const withdrawable = calculateWithdrawableBalance(balance, locked);
+                const locked = calculateTotalLockedBonuses({
+                  initialBonus: userProfile?.initialBonus,
+                  referralBonusEarned: userProfile?.referralBonusEarned,
+                  inviteBonusBalance: userProfile?.inviteBonusBalance,
+                  firstDepositBonusEarned: userProfile?.firstDepositBonusEarned,
+                  rewardBonusEarned: userProfile?.rewardBonusEarned,
+                  lockedPrincipal: userProfile?.lockedPrincipal,
+                });
+                const hasDep = Boolean(userProfile?.hasDeposited || (userProfile?.totalDeposited && userProfile.totalDeposited > 0));
+                const withdrawable = calculateWithdrawableBalance(balance, locked, hasDep, userProfile?.totalDeposited);
                 const referralCount = userProfile?.referralCount || 0;
-                const referralBonus = userProfile?.referralBonusEarned || referralCount * 50;
+                const referralBonus = userProfile?.referralBonusEarned || 0;
+                const referralLink = buildReferralLink(userCode);
 
                 const copyUserId = () => {
                   navigator.clipboard.writeText(userCode);
@@ -396,6 +423,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   setCopiedReferral(true);
                   soundManager.playClick();
                   setTimeout(() => setCopiedReferral(false), 2000);
+                };
+
+                const copyReferralLink = () => {
+                  navigator.clipboard.writeText(referralLink);
+                  setCopiedRefLink(true);
+                  soundManager.playClick();
+                  setTimeout(() => setCopiedRefLink(false), 2000);
                 };
 
                 return (
@@ -444,7 +478,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                       <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#1b263b]">
                         <div className="bg-[#080c14] p-2 rounded-xl border border-white/5">
-                          <span className="text-[10px] text-slate-400 block">রেফার কমিশন (লকড বোনাস):</span>
+                          <span className="text-[10px] text-slate-400 block">লকড বোনাস (ইনভাইট ও অন্যান্য):</span>
                           <span className="font-bold text-xs text-amber-300 font-mono">
                             ৳ {locked.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
@@ -458,25 +492,45 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </div>
 
                       <p className="text-[10px] text-slate-400 bg-emerald-950/30 p-2 rounded-xl border border-emerald-900/30 leading-snug">
-                        💡 <span className="text-emerald-300 font-semibold">ক্যাশআউট নিয়ম:</span> মিনিমাম ক্যাশআউট ৫০০ টাকা। ক্যাশ-ইন ও গেম খেলে অর্জিত ব্যালেন্স সম্পূর্ণ ক্যাশআউট করা যাবে, শুধুমাত্র রেফার কমিশন সরাসরি উত্তোলন করা যাবে না।
+                        💡 <span className="text-emerald-300 font-semibold">ক্যাশআউট নিয়ম:</span> মিনিমাম ক্যাশআউট ৫০০ টাকা। ইনভাইট বোনাস ১০০% ও অন্যান্য বোনাস সরাসরি উত্তোলন করা যাবে না এবং ইনভাইট বোনাস দিয়ে লাভবান হওয়া যাবে না।
                       </p>
                     </div>
 
-                    {/* Refer & Earn ৳50 Card */}
-                    <div className="bg-gradient-to-br from-[#121c2c] to-[#0f1724] border border-[#23354f] rounded-2xl p-3.5 space-y-2 text-xs">
+                    {/* Invite Bonus 100% Card */}
+                    <div className="bg-gradient-to-br from-[#0e1f2d] to-[#0c1422] border border-cyan-500/40 rounded-2xl p-3.5 space-y-2.5 text-xs">
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+                        <div className="flex items-center gap-1.5 text-cyan-300 font-bold">
                           <Gift className="w-4 h-4" />
-                          <span>রেফার ও ইনভাইট বোনাস (৳৫০/ফ্রেন্ড)</span>
+                          <span>ইনভাইট বোনাস ১০০%</span>
                         </div>
-                        <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">
-                          ৳ ৫০ বোনাস
+                        <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] font-black border border-cyan-500/40">
+                          ১০০% বোনাস
                         </span>
                       </div>
 
                       <p className="text-[11px] text-slate-300 leading-snug">
-                        আপনার রেফারেল কোড দিয়ে কোনো বন্ধু সাইনআপ করলেই আপনি পাবেন <span className="text-amber-400 font-bold">৳ ৫০ বোনাস</span>! (যেমন: ২০ জন একাউন্ট করলে ১,০০০ টাকা কমিশন বোনাস)।
+                        আপনার রেফার লিংক বা কোড ব্যবহার করে কেউ একাউন্ট করে শুরুতে যত টাকা ডিপোজিট করবে, ঠিক তত টাকা <span className="text-emerald-400 font-bold">১০০%</span> আপনার রেফার বোনাস যুক্ত হবে!
                       </p>
+
+                      {/* Referral Link */}
+                      <div className="bg-[#080c14] p-2 rounded-xl border border-[#1e2a3c] space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-cyan-300 flex items-center gap-1 font-semibold">
+                            <Link2 className="w-3 h-3" />
+                            <span>রেফারেল লিংক:</span>
+                          </span>
+                          <button
+                            onClick={copyReferralLink}
+                            className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                          >
+                            {copiedRefLink ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedRefLink ? 'লিংক কপি হয়েছে' : 'লিংক কপি'}</span>
+                          </button>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-300 truncate select-all">
+                          {referralLink}
+                        </div>
+                      </div>
 
                       <div className="flex items-center justify-between bg-[#080c14] p-2.5 rounded-xl border border-[#1e2a3c]">
                         <div>
@@ -492,10 +546,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         </button>
                       </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 pt-1">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 pt-0.5">
                         <span>মোট বন্ধু ইনভাইট: <strong className="text-white font-mono">{referralCount} জন</strong></span>
-                        <span>অর্জিত কমিশন: <strong className="text-emerald-400 font-mono">৳ {referralBonus}</strong></span>
+                        <span>মোট ইনভাইট বোনাস: <strong className="text-emerald-400 font-mono">৳ {referralBonus.toLocaleString()}</strong></span>
                       </div>
+
+                      <p className="text-[10px] text-rose-300/90 bg-rose-950/30 border border-rose-500/30 rounded-lg px-2 py-1.5 leading-snug">
+                        বি:দ্র: ইনভাইট বোনাসের টাকা উঠাতে পারবেন না এবং সেই টাকা দিয়ে কখনই লাভবান হওয়া যাবে না।
+                      </p>
                     </div>
                   </>
                 );
@@ -714,7 +772,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                               রেফারেল কোড (ঐচ্ছিক)
                             </label>
                             <span className="text-[10px] text-amber-400 font-semibold">
-                              কারো ইনভাইট থাকলে দিন
+                              {hasAutoCapturedRef && referralCodeInput
+                                ? '✓ রেফার লিংক থেকে যুক্ত হয়েছে'
+                                : 'কারো ইনভাইট থাকলে দিন'}
                             </span>
                           </div>
                           <div className="relative">
@@ -722,9 +782,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                             <input
                               type="text"
                               value={referralCodeInput}
-                              onChange={(e) => setReferralCodeInput(e.target.value.toUpperCase())}
+                              onChange={(e) => {
+                                setReferralCodeInput(e.target.value.toUpperCase());
+                                setHasAutoCapturedRef(false);
+                              }}
                               placeholder="যেমন: USER-18492"
-                              className="w-full bg-[#0d121c] border border-[#232f44] rounded-xl pl-9 pr-3 py-2.5 text-xs uppercase font-mono text-amber-300 placeholder-slate-500 focus:outline-hidden focus:border-amber-400 transition-colors"
+                              className={`w-full bg-[#0d121c] border rounded-xl pl-9 pr-3 py-2.5 text-xs uppercase font-mono text-amber-300 placeholder-slate-500 focus:outline-hidden focus:border-amber-400 transition-colors ${
+                                hasAutoCapturedRef && referralCodeInput
+                                  ? 'border-emerald-500/60 bg-emerald-950/20'
+                                  : 'border-[#232f44]'
+                              }`}
                             />
                           </div>
                         </div>
@@ -781,6 +848,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <p className="text-xs text-slate-300 font-medium">
                       পাসওয়ার্ড মনে রাখার ঝামেলা ছাড়াই সরাসরি আপনার জিমেইল দিয়ে ফ্রি সাইনআপ ও লগইন করুন:
                     </p>
+
+                    {/* Optional Referral Code for Google Signup */}
+                    <div className="text-left">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10.5px] font-bold text-slate-300">
+                          রেফারেল কোড (ঐচ্ছিক):
+                        </label>
+                        {hasAutoCapturedRef && referralCodeInput && (
+                          <span className="text-[10px] text-emerald-400 font-semibold">
+                            ✓ লিংক থেকে যুক্ত
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        value={referralCodeInput}
+                        onChange={(e) => {
+                          setReferralCodeInput(e.target.value.toUpperCase());
+                          setHasAutoCapturedRef(false);
+                        }}
+                        placeholder="যেমন: USER-18492"
+                        className="w-full bg-[#0d121c] border border-[#232f44] rounded-xl px-3 py-2 text-xs uppercase font-mono text-amber-300 placeholder-slate-500 focus:outline-hidden focus:border-amber-400"
+                      />
+                    </div>
+
                     <button
                       type="button"
                       onClick={handleGoogleLogin}

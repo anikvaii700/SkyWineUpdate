@@ -40,6 +40,10 @@ import {
   Trash2,
   Sparkles,
   Calendar,
+  BarChart3,
+  Gamepad2,
+  Gift,
+  Sliders,
 } from 'lucide-react';
 import {
   getActivePlayersSettings,
@@ -76,18 +80,35 @@ import {
 import { UserFullHistoryModal } from './UserFullHistoryModal';
 import { AdminUserEditModal } from './AdminUserEditModal';
 import { AdminStealthGuideModal } from './AdminStealthGuideModal';
+import { AdminExtraTabs, AdminExtraTabKey } from './AdminExtraTabs';
+import {
+  AppControlConfig,
+  getStoredAppControls,
+  saveAppControls,
+  subscribeToAppControls,
+  listenToAllReferralsForAdmin,
+} from '../services/appControlService';
 import { getAllAccountsWithStats, calculateWithdrawableBalance, syncUsersFromFirestore } from '../services/userManagement';
-import { StoredPhoneAccount, getStoredPhoneAccounts } from '../services/phoneAuth';
+import { StoredPhoneAccount, ReferralRecord, getStoredPhoneAccounts } from '../services/phoneAuth';
 import { setAdminVisible, getRegisteredAdminPhone, saveRegisteredAdminPhone, isUserAdminAccount } from '../services/adminAuth';
 import { db } from '../services/firebase';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
+
+type AdminTabType =
+  | 'requests'
+  | 'withdrawals'
+  | 'users'
+  | 'marquee'
+  | 'settings'
+  | 'notifications'
+  | AdminExtraTabKey;
 
 interface AdminPanelProps {
   isOpen: boolean;
   onClose: () => void;
   currentUserPhone?: string | null;
   onBalanceAdjusted?: () => void;
-  initialTab?: 'requests' | 'withdrawals' | 'settings' | 'users' | 'marquee' | 'notifications';
+  initialTab?: AdminTabType;
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -110,7 +131,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [pinError, setPinError] = useState<string>('');
   const [showPin, setShowPin] = useState<boolean>(false);
 
-  const [activeTab, setActiveTab] = useState<'requests' | 'withdrawals' | 'users' | 'marquee' | 'settings' | 'notifications'>(initialTab || 'requests');
+  const [activeTab, setActiveTab] = useState<AdminTabType>(initialTab || 'requests');
+  const [appControls, setAppControls] = useState<AppControlConfig>(getStoredAppControls);
+  const [isSavingControls, setIsSavingControls] = useState<boolean>(false);
+  const [allReferrals, setAllReferrals] = useState<ReferralRecord[]>([]);
 
   useEffect(() => {
     if (initialTab && isOpen && isAuthorized) {
@@ -277,6 +301,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setWithdrawals(remoteWithdrawals);
       });
 
+      // Realtime listener for App Controls (Game Control, Limits, Maintenance, Bonuses)
+      const unsubControls = subscribeToAppControls((cfg) => {
+        setAppControls(cfg);
+      });
+
+      // Realtime listener for all referral records
+      const unsubReferrals = listenToAllReferralsForAdmin((refs) => {
+        setAllReferrals(refs);
+      });
+
       let unsubUsers: (() => void) | null = null;
       try {
         unsubUsers = onSnapshot(collection(db, 'users'), () => {
@@ -291,6 +325,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         unsubBroadcast();
         unsubDeposits();
         unsubWithdrawals();
+        unsubControls();
+        unsubReferrals();
       };
     }
   }, [isOpen]);
@@ -462,6 +498,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  // Save App Controls (Game Control, Maintenance, Limits, Bonus Toggles)
+  const handleUpdateAppControls = async (
+    next: AppControlConfig,
+    toastTitle?: string,
+    toastMsg?: string
+  ) => {
+    setAppControls(next);
+    setIsSavingControls(true);
+    try {
+      const saved = await saveAppControls(next);
+      setAppControls(saved);
+      if (toastTitle) {
+        showAdminToast(toastTitle, toastMsg || 'সফলভাবে সংরক্ষিত হয়েছে।', 'success');
+      }
+    } catch {
+      showAdminToast('সংরক্ষণে সমস্যা', 'আবার চেষ্টা করুন।', 'error');
+    } finally {
+      setIsSavingControls(false);
+    }
+  };
+
+  const handleUpdateFirstDepositPercent = async (percent: number) => {
+    const clean = Math.max(0, Math.min(200, Math.round(percent)));
+    const nextSettings = { ...settings, firstDepositBonusPercent: clean };
+    setSettings(nextSettings);
+    await savePaymentSettings(nextSettings);
+    showAdminToast(
+      `প্রথম ডিপোজিট বোনাস ${clean}% সেট হয়েছে!`,
+      'নতুন প্রথম ডিপোজিট বোনাস হার ক্লাউডে আপডেট হয়েছে।',
+      'success'
+    );
+  };
+
   // Handle Approve Request
   const handleApprove = async (req: ManualDepositRequest) => {
     soundManager.playClick();
@@ -472,9 +541,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const bonusText = res.isFirstDeposit && res.bonusAmount && res.bonusAmount > 0
         ? ` (মূল ৳${req.amount.toLocaleString()} + প্রথম ডিপোজিট ${res.bonusPercent}% বোনাস ৳${res.bonusAmount.toLocaleString()} = মোট ৳${(res.totalCredited || (req.amount + res.bonusAmount)).toLocaleString()})`
         : ` ৳${req.amount.toLocaleString()}`;
+      const inviteText = res.inviteBonusRewarded
+        ? ` | রেফারার (${res.inviteBonusRewarded.referrerCode || 'Referrer'}) ১০০% ইনভাইট বোনাস ৳${res.inviteBonusRewarded.bonusAmount.toLocaleString()} পেয়েছে (লকড)।`
+        : '';
       showAdminToast(
         'ডিপোজিট সফলভাবে অনুমোদিত!',
-        `গ্রাহক ${req.userIdentifier}-এর একাউন্টে${bonusText} ব্যালেন্স সফলভাবে যোগ ও বোনাস লক করা হয়েছে।`,
+        `গ্রাহক ${req.userIdentifier}-এর একাউন্টে${bonusText} ব্যালেন্স সফলভাবে যোগ ও বোনাস লক করা হয়েছে।${inviteText}`,
         'success'
       );
     } else {
@@ -870,56 +942,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        {/* Top Header */}
-        <div className="p-4 sm:p-5 border-b border-[#1b263b] flex items-center justify-between bg-gradient-to-r from-[#111927] to-[#141e30]">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shadow-lg">
-              <ShieldCheck className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-black tracking-wide">এডমিন কন্ট্রোল প্যানেল (Admin Panel)</h2>
-                {pendingCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-xs animate-pulse">
-                    {pendingCount} টি অপেক্ষমান
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-400">ম্যানুয়াল বিকাশ, নগদ, রকেট নম্বর সেটআপ ও ডিপোজিট অনুমোদন</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            {isAuthenticated && (
-              <>
-                {/* Secret Access Guide Button */}
-                <button
-                  onClick={() => setShowStealthGuideModal(true)}
-                  className="px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 flex items-center gap-1.5 text-xs font-bold transition-all cursor-pointer"
-                  title="অনলাইনে পাবলিশিং ও গোপন এডমিন এক্সেস নির্দেশিকা"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span className="hidden md:inline">সিক্রেট গাইড</span>
-                </button>
-
-                <button
-                  onClick={handleRefresh}
-                  disabled={isRefreshing}
-                  className="p-2 rounded-xl bg-[#1a2538] hover:bg-[#24334c] text-slate-300 hover:text-white transition-all flex items-center gap-1.5 text-xs font-semibold"
-                  title="রিফ্রেশ করুন"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-400' : ''}`} />
-                  <span className="hidden sm:inline">রিফ্রেশ</span>
-                </button>
-              </>
-            )}
-            <button
-              onClick={onClose}
-              className="w-9 h-9 rounded-full bg-[#1a2538] hover:bg-[#25344e] text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+        {/* Top Header: Minimal "Admin" + Cancel button only */}
+        <div className="px-4 py-3 border-b border-[#1b263b] flex items-center justify-between bg-gradient-to-r from-[#111927] to-[#141e30] shrink-0">
+          <h2 className="text-base sm:text-lg font-black tracking-wide text-white">Admin</h2>
+          <button
+            onClick={onClose}
+            aria-label="বন্ধ করুন"
+            className="w-8 h-8 rounded-full bg-[#1a2538] hover:bg-[#25344e] text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
         {/* ==================== PIN PROTECTION SCREEN ==================== */}
@@ -1137,6 +1169,77 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">
                       {broadcastList.length}
                     </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => {
+                    soundManager.playClick();
+                    setActiveTab('analytics');
+                  }}
+                  className={`py-2 px-3 sm:px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === 'analytics'
+                      ? 'bg-[#1e2a3f] text-white border-b-2 border-emerald-400 shadow-md'
+                      : 'text-slate-400 hover:text-white hover:bg-[#151e2e]'
+                  }`}
+                >
+                  <BarChart3 className="w-4 h-4 text-emerald-400" />
+                  <span>অ্যানালিটিক্স ও লাভ</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    soundManager.playClick();
+                    setActiveTab('game_control');
+                  }}
+                  className={`py-2 px-3 sm:px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === 'game_control'
+                      ? 'bg-[#1e2a3f] text-white border-b-2 border-red-400 shadow-md'
+                      : 'text-slate-400 hover:text-white hover:bg-[#151e2e]'
+                  }`}
+                >
+                  <Gamepad2 className="w-4 h-4 text-red-400" />
+                  <span>গেম কন্ট্রোল</span>
+                  {(appControls.aviatorForceCrashMultiplier !== null || appControls.wingoForceNumber !== null) && (
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                  )}
+                </button>
+
+                <button
+                  onClick={() => {
+                    soundManager.playClick();
+                    setActiveTab('bonuses');
+                  }}
+                  className={`py-2 px-3 sm:px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === 'bonuses'
+                      ? 'bg-[#1e2a3f] text-white border-b-2 border-amber-400 shadow-md'
+                      : 'text-slate-400 hover:text-white hover:bg-[#151e2e]'
+                  }`}
+                >
+                  <Gift className="w-4 h-4 text-amber-400" />
+                  <span>বোনাস ও ইনভাইট</span>
+                  {allReferrals.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">
+                      {allReferrals.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => {
+                    soundManager.playClick();
+                    setActiveTab('app_control');
+                  }}
+                  className={`py-2 px-3 sm:px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === 'app_control'
+                      ? 'bg-[#1e2a3f] text-white border-b-2 border-cyan-400 shadow-md'
+                      : 'text-slate-400 hover:text-white hover:bg-[#151e2e]'
+                  }`}
+                >
+                  <Sliders className="w-4 h-4 text-cyan-400" />
+                  <span>অ্যাপ ও লিমিট</span>
+                  {appControls.maintenanceMode && (
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                   )}
                 </button>
               </div>
@@ -3658,6 +3761,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   )}
                 </div>
               </div>
+            )}
+
+            {/* ==================== EXTRA ADMIN TABS (ANALYTICS, GAME CONTROL, BONUSES & INVITE, APP LIMITS) ==================== */}
+            {(activeTab === 'analytics' ||
+              activeTab === 'game_control' ||
+              activeTab === 'bonuses' ||
+              activeTab === 'app_control') && (
+              <AdminExtraTabs
+                activeTab={activeTab}
+                controls={appControls}
+                onUpdateControls={handleUpdateAppControls}
+                isSavingControls={isSavingControls}
+                paymentSettings={settings}
+                onUpdateFirstDepositPercent={handleUpdateFirstDepositPercent}
+                requests={requests}
+                withdrawals={withdrawals}
+                accountsWithStats={accountsWithStats}
+                allReferrals={allReferrals}
+                isRefreshing={isRefreshing}
+                onRefresh={handleRefresh}
+                onOpenStealthGuide={() => setShowStealthGuideModal(true)}
+                onTogglePinChange={() => setShowPinChange((prev) => !prev)}
+              />
             )}
           </div>
         )}

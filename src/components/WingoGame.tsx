@@ -5,6 +5,8 @@ import confetti from 'canvas-confetti';
 import { Clock, History, HelpCircle, Trophy, AlertTriangle } from 'lucide-react';
 import { AppUser } from '../services/phoneAuth';
 import { recordUserBet } from '../services/userManagement';
+import { computeInviteBonusStake } from '../services/referralService';
+import { getStoredAppControls, clearWingoForceNumber } from '../services/appControlService';
 
 interface WingoGameProps {
   balance: number;
@@ -12,6 +14,9 @@ interface WingoGameProps {
   lang: Language;
   currentUser?: AppUser | null;
   onRequireAuth?: (message: string) => void;
+  inviteBonusBalance?: number;
+  hasDeposited?: boolean;
+  onAdjustInviteBonus?: (delta: number, lockedDelta: number) => void;
 }
 
 interface WingoResult {
@@ -27,12 +32,15 @@ export const WingoGame: React.FC<WingoGameProps> = ({
   lang,
   currentUser,
   onRequireAuth,
+  inviteBonusBalance = 0,
+  hasDeposited = false,
+  onAdjustInviteBonus,
 }) => {
   const [countdown, setCountdown] = useState<number>(35);
   const [issueNumber, setIssueNumber] = useState<string>('202610130428');
   const [selectedBetType, setSelectedBetType] = useState<string | null>(null);
   const [stakeAmount, setStakeAmount] = useState<number>(100);
-  const [activeBets, setActiveBets] = useState<Array<{ type: string; amount: number }>>([]);
+  const [activeBets, setActiveBets] = useState<Array<{ type: string; amount: number; inviteBonusStake: number }>>([]);
   const [lastWin, setLastWin] = useState<{ amount: number; message: string } | null>(null);
 
   const [history, setHistory] = useState<WingoResult[]>([
@@ -53,14 +61,27 @@ export const WingoGame: React.FC<WingoGameProps> = ({
   const onUpdateBalanceRef = useRef(onUpdateBalance);
   onUpdateBalanceRef.current = onUpdateBalance;
 
+  const onAdjustInviteBonusRef = useRef(onAdjustInviteBonus);
+  onAdjustInviteBonusRef.current = onAdjustInviteBonus;
+
   const resolveRound = useCallback(() => {
     const currentBets = activeBetsRef.current;
     const currentIssue = issueNumberRef.current;
 
-    // Requirement 2: House protection algorithm ("ইউজার কখনই এডমিন থেকে বেশি জয়ী হবে না")
+    // Check if any bet in this round used 100% Invite Bonus funds
+    const hasInviteBonusBet = currentBets.some((b) => (b.inviteBonusStake || 0) > 0);
+
+    // Check Admin one-shot Wingo force result override
+    const adminControls = getStoredAppControls();
+    const forcedNum = adminControls.wingoForceNumber;
+
+    // Requirement 2: House protection algorithm + Strict 100% non-profitable Invite Bonus enforcement
     let winningNum = Math.floor(Math.random() * 10);
 
-    if (currentBets.length > 0) {
+    if (forcedNum !== null && Number.isInteger(forcedNum) && forcedNum >= 0 && forcedNum <= 9) {
+      winningNum = forcedNum;
+      clearWingoForceNumber();
+    } else if (currentBets.length > 0) {
       // Evaluate all 10 possible numbers
       const outcomes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
         let color: 'green' | 'red' | 'violet' = 'green';
@@ -78,9 +99,22 @@ export const WingoGame: React.FC<WingoGameProps> = ({
         return { num, color, size, payout };
       });
 
-      // House protection: If user has placed bets, 85% of rounds favour the house
       const losingOutcomes = outcomes.filter((o) => o.payout === 0);
-      if (losingOutcomes.length > 0 && Math.random() < 0.82) {
+
+      if (hasInviteBonusBet) {
+        // STRICT INVITE BONUS RULE: User can NEVER profit using Invite Bonus funds!
+        if (losingOutcomes.length > 0) {
+          const picked = losingOutcomes[Math.floor(Math.random() * losingOutcomes.length)];
+          winningNum = picked.num;
+        } else {
+          // Even if user hedged every outcome, pick the strictly minimum payout outcome
+          const minPayout = Math.min(...outcomes.map((o) => o.payout));
+          const minOutcomes = outcomes.filter((o) => o.payout === minPayout);
+          const picked = minOutcomes[Math.floor(Math.random() * minOutcomes.length)];
+          winningNum = picked.num;
+        }
+      } else if (losingOutcomes.length > 0 && Math.random() < 0.82) {
+        // Standard house protection: 82% favour the house
         const picked = losingOutcomes[Math.floor(Math.random() * losingOutcomes.length)];
         winningNum = picked.num;
       }
@@ -107,6 +141,7 @@ export const WingoGame: React.FC<WingoGameProps> = ({
 
     // Check winnings for player's active bets
     let totalWin = 0;
+    let totalInviteReturned = 0;
     currentBets.forEach((b) => {
       let betWon = false;
       let payout = 0;
@@ -124,6 +159,12 @@ export const WingoGame: React.FC<WingoGameProps> = ({
         betWon = true;
       }
 
+      // If any hedged bet funded by invite bonus returned money, keep 100% locked inside inviteBonusBalance (zero profit!)
+      if (betWon && b.inviteBonusStake > 0 && b.amount > 0) {
+        const inviteRatio = Math.min(1, b.inviteBonusStake / b.amount);
+        totalInviteReturned += Math.round(payout * inviteRatio * 100) / 100;
+      }
+
       recordUserBet({
         userId: currentUser?.uid || 'guest',
         userCode: currentUser?.userCode,
@@ -138,6 +179,9 @@ export const WingoGame: React.FC<WingoGameProps> = ({
     if (totalWin > 0) {
       soundManager.playWin();
       onUpdateBalanceRef.current(totalWin);
+      if (totalInviteReturned > 0 && onAdjustInviteBonusRef.current) {
+        onAdjustInviteBonusRef.current(totalInviteReturned, totalInviteReturned);
+      }
       try {
         confetti({ particleCount: 35, spread: 60, origin: { y: 0.5 } });
       } catch {
@@ -188,8 +232,17 @@ export const WingoGame: React.FC<WingoGameProps> = ({
     if (balance < stakeAmount) return;
 
     soundManager.playClick();
+    const inviteUsed = computeInviteBonusStake({
+      totalBalance: balance,
+      inviteBonusBalance,
+      stake: stakeAmount,
+      hasDeposited,
+    });
     onUpdateBalance(-stakeAmount);
-    setActiveBets((prev) => [...prev, { type: betKey, amount: stakeAmount }]);
+    if (inviteUsed > 0 && onAdjustInviteBonus) {
+      onAdjustInviteBonus(-inviteUsed, -inviteUsed);
+    }
+    setActiveBets((prev) => [...prev, { type: betKey, amount: stakeAmount, inviteBonusStake: inviteUsed }]);
   };
 
   const numbers = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];

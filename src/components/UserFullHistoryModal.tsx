@@ -498,8 +498,8 @@ export const UserFullHistoryModal: React.FC<UserFullHistoryModalProps> = ({
           {activeTab === 'referrals' && (
             <div className="space-y-2.5">
               <div className="bg-[#0b1019] p-3 rounded-xl border border-purple-500/30 text-xs text-purple-300 flex items-center justify-between">
-                <span>মোট সফল রেফারেল: <strong>{referrals.length} জন</strong></span>
-                <span>মোট অর্জিত কমিশন: <strong>৳ {referrals.length * 50}</strong></span>
+                <span>মোট ইনভাইট: <strong>{referrals.length} জন</strong></span>
+                <span>মোট ১০০% ইনভাইট বোনাস: <strong>৳ {referrals.reduce((sum, r) => sum + (r.bonusAmount || 0), 0).toLocaleString()}</strong></span>
               </div>
 
               {referrals.length === 0 ? (
@@ -507,25 +507,34 @@ export const UserFullHistoryModal: React.FC<UserFullHistoryModalProps> = ({
                   এই ইউজারের রেফারেল কোড দিয়ে এখনও কেউ অ্যাকাউন্ট করেনি।
                 </div>
               ) : (
-                referrals.map((r) => (
-                  <div
-                    key={r.id}
-                    className="p-3 bg-[#0b1019] border border-[#1d273a] rounded-xl flex items-center justify-between text-xs"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-amber-300">{r.referredUserCode}</span>
-                        <span className="text-slate-400 font-mono">{r.referredPhone}</span>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
-                          +৳ {r.bonusAmount} বোনাস
-                        </span>
+                referrals.map((r) => {
+                  const isRewarded = r.status === 'rewarded' || (r.bonusAmount || 0) > 0;
+                  return (
+                    <div
+                      key={r.id}
+                      className="p-3 bg-[#0b1019] border border-[#1d273a] rounded-xl flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono font-bold text-amber-300">{r.referredUserCode}</span>
+                          <span className="text-slate-400 font-mono">{r.referredPhone || r.referredName}</span>
+                          {isRewarded ? (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
+                              +৳ {r.bonusAmount.toLocaleString()} (১০০% বোনাস)
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 text-[10px] font-bold">
+                              ১ম ডিপোজিট বাকি
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right text-[10px] text-slate-400 font-mono">
+                        {new Date(r.createdAt).toLocaleString('bn-BD', { dateStyle: 'short', timeStyle: 'short' })}
                       </div>
                     </div>
-                    <div className="text-right text-[10px] text-slate-400 font-mono">
-                      {new Date(r.createdAt).toLocaleString('bn-BD', { dateStyle: 'short', timeStyle: 'short' })}
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}

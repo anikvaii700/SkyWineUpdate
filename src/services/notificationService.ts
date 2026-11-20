@@ -151,8 +151,8 @@ export function checkAndTriggerDailyReminder(
         try {
           new Notification(title, {
             body: message,
-            icon: '/skywin-logo.svg',
-            badge: '/icon.svg',
+            icon: '/pwa-192x192.png',
+            badge: '/pwa-192x192.png',
             tag: 'daily-bonus-reminder',
           });
         } catch {

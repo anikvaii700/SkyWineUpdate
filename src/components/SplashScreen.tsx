@@ -64,12 +64,12 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
       <div className="flex flex-col items-center text-center my-auto">
         {/* Glowing Logo Icon */}
         <div className="relative mb-6">
-          <div className="absolute -inset-4 bg-amber-500/20 rounded-3xl blur-2xl animate-pulse" />
-          <div className="relative w-28 h-28 rounded-3xl p-1 bg-gradient-to-br from-amber-400 via-red-600 to-amber-600 shadow-[0_12px_36px_rgba(255,183,3,0.4)] flex items-center justify-center transform animate-pulse">
-            <img 
-              src="/skywin-logo.svg" 
-              alt="SkyWin BD Logo" 
-              className="w-full h-full rounded-[22px] object-cover"
+          <div className="absolute -inset-4 bg-gradient-to-tr from-cyan-500/25 via-blue-600/20 to-fuchsia-500/25 rounded-3xl blur-2xl animate-pulse" />
+          <div className="relative w-32 h-32 rounded-[28px] bg-[#000B2C] shadow-[0_12px_40px_rgba(56,189,248,0.35)] flex items-center justify-center overflow-hidden p-1">
+            <img
+              src="/assets/aistudio/SkyWinBD_Airborne_Logo_0dd77831.webp"
+              alt="SkyWin BD Logo"
+              className="w-full h-full object-contain rounded-[24px]"
               referrerPolicy="no-referrer"
             />
           </div>

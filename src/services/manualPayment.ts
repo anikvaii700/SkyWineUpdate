@@ -14,6 +14,7 @@ import {
   addDoc,
 } from 'firebase/firestore';
 import { syncPhoneAccountBalance } from './phoneAuth';
+import { creditFirstDepositInviteBonus } from './referralService';
 
 export interface PaymentGatewayConfig {
   number: string;
@@ -414,6 +415,10 @@ export async function approveManualDepositRequest(
   bonusPercent?: number;
   bonusAmount?: number;
   totalCredited?: number;
+  inviteBonusRewarded?: {
+    referrerCode?: string;
+    bonusAmount: number;
+  };
 }> {
   let requests = getStoredDepositRequests();
   let index = requests.findIndex((r) => r.id === requestId);
@@ -472,6 +477,11 @@ export async function approveManualDepositRequest(
   let isFirstDeposit = false;
   let bonusAmount = 0;
   let totalAmountToCredit = creditedAmount;
+  let depositorReferredBy = '';
+  let depositorReferredByUid = '';
+  let alreadyRewardedReferral = false;
+  let depositorDisplayName = target.userIdentifier || '';
+  let depositorResolvedCode = targetUserCode;
 
   try {
     const found = await findUserDocInFirestore({
@@ -485,10 +495,19 @@ export async function approveManualDepositRequest(
       const curData = found.snap.data() || {};
       const curBal = typeof curData.balance === 'number' ? curData.balance : 0;
       const curDep = typeof curData.totalDeposited === 'number' ? curData.totalDeposited : 0;
-      const refBonus = typeof curData.referralBonusEarned === 'number' ? curData.referralBonusEarned : 0;
+      const activeInviteBonus =
+        typeof curData.inviteBonusBalance === 'number'
+          ? curData.inviteBonusBalance
+          : (typeof curData.referralBonusEarned === 'number' ? curData.referralBonusEarned : 0);
       const welcomeBonus = curData.initialBonus !== undefined ? curData.initialBonus : 100;
       const existingFirstBonus = typeof curData.firstDepositBonusEarned === 'number' ? curData.firstDepositBonusEarned : 0;
       const rewardBonus = typeof curData.rewardBonusEarned === 'number' ? curData.rewardBonusEarned : 0;
+
+      depositorReferredBy = curData.referredBy || '';
+      depositorReferredByUid = curData.referredByUid || '';
+      alreadyRewardedReferral = Boolean(curData.firstDepositReferralRewarded);
+      depositorDisplayName = curData.displayName || depositorDisplayName;
+      depositorResolvedCode = curData.userCode || depositorResolvedCode;
 
       // Determine if this is the user's first deposit
       isFirstDeposit = curDep <= 0 && curData.hasDeposited !== true && existingFirstBonus <= 0;
@@ -501,8 +520,8 @@ export async function approveManualDepositRequest(
       newBalance = Math.round((curBal + totalAmountToCredit) * 100) / 100;
       const newDep = Math.round((curDep + creditedAmount) * 100) / 100;
 
-      // RULE: All extra money (welcome bonus, first deposit bonus, referral commission, spin rewards) are LOCKED and cannot be withdrawn!
-      const totalLockedBonus = welcomeBonus + refBonus + updatedFirstBonus + rewardBonus;
+      // RULE: All extra money (welcome bonus, first deposit bonus, 100% invite bonus, spin rewards) are LOCKED and cannot be withdrawn!
+      const totalLockedBonus = welcomeBonus + activeInviteBonus + updatedFirstBonus + rewardBonus;
 
       await setDoc(
         resolvedDocRef,
@@ -512,6 +531,9 @@ export async function approveManualDepositRequest(
           hasDeposited: true,
           firstDepositBonusEarned: updatedFirstBonus,
           lockedPrincipal: totalLockedBonus,
+          ...(isFirstDeposit && (depositorReferredBy || depositorReferredByUid)
+            ? { firstDepositReferralRewarded: true }
+            : {}),
           updatedAt: now,
         },
         { merge: true }
@@ -544,6 +566,7 @@ export async function approveManualDepositRequest(
         referralCode: targetUserCode || `USER-${cleanSender.slice(-5)}`,
         referralCount: 0,
         referralBonusEarned: 0,
+        inviteBonusBalance: 0,
         provider: 'phone',
         createdAt: now,
         updatedAt: now,
@@ -588,16 +611,35 @@ export async function approveManualDepositRequest(
           accounts[phoneKey].phoneNumber === cleanSender ||
           (resolvedDocRef && accounts[phoneKey].uid === resolvedDocRef.id)
         ) {
+          if (!depositorReferredBy && accounts[phoneKey].referredBy) {
+            depositorReferredBy = accounts[phoneKey].referredBy;
+          }
+          if (!depositorReferredByUid && accounts[phoneKey].referredByUid) {
+            depositorReferredByUid = accounts[phoneKey].referredByUid;
+          }
+          if (accounts[phoneKey].firstDepositReferralRewarded) {
+            alreadyRewardedReferral = true;
+          }
+          if (!isFirstDeposit && (accounts[phoneKey].totalDeposited || 0) <= 0 && !accounts[phoneKey].hasDeposited) {
+            isFirstDeposit = true;
+          }
+
           accounts[phoneKey].balance = (accounts[phoneKey].balance || 0) + totalAmountToCredit;
           accounts[phoneKey].totalDeposited = (accounts[phoneKey].totalDeposited || 0) + creditedAmount;
           if (isFirstDeposit && bonusAmount > 0) {
             accounts[phoneKey].firstDepositBonusEarned = (accounts[phoneKey].firstDepositBonusEarned || 0) + bonusAmount;
           }
           accounts[phoneKey].hasDeposited = true;
+          if (isFirstDeposit && (depositorReferredBy || depositorReferredByUid)) {
+            accounts[phoneKey].firstDepositReferralRewarded = true;
+          }
           const welcome = accounts[phoneKey].initialBonus !== undefined ? accounts[phoneKey].initialBonus : 100;
-          const ref = accounts[phoneKey].referralBonusEarned || 0;
+          const activeInv =
+            accounts[phoneKey].inviteBonusBalance !== undefined
+              ? accounts[phoneKey].inviteBonusBalance
+              : (accounts[phoneKey].referralBonusEarned || 0);
           const fBonus = accounts[phoneKey].firstDepositBonusEarned || 0;
-          accounts[phoneKey].lockedPrincipal = welcome + ref + fBonus;
+          accounts[phoneKey].lockedPrincipal = welcome + activeInv + fBonus;
           accounts[phoneKey].updatedAt = now;
           localStorage.setItem('aviator_phone_accounts_v1', JSON.stringify(accounts));
           break;
@@ -606,6 +648,33 @@ export async function approveManualDepositRequest(
     }
   } catch (err) {
     console.warn('Error crediting local phone account:', err);
+  }
+
+  // 2.5. 100% INVITE BONUS RULE:
+  // If this is the invited user's FIRST deposit and they registered via a referral link/code,
+  // credit exact 100% of their first deposit amount (`creditedAmount`) to their referrer!
+  // (Strictly non-withdrawable AND non-profitable!)
+  let inviteBonusRewarded: { referrerCode?: string; bonusAmount: number } | undefined = undefined;
+  if (isFirstDeposit && !alreadyRewardedReferral && (depositorReferredBy || depositorReferredByUid)) {
+    try {
+      const refRes = await creditFirstDepositInviteBonus({
+        depositorUid: resolvedDocRef ? resolvedDocRef.id : targetUserId,
+        depositorCode: depositorResolvedCode,
+        depositorPhone: cleanSender,
+        depositorName: depositorDisplayName,
+        referredByCode: depositorReferredBy,
+        referredByUid: depositorReferredByUid,
+        firstDepositAmount: creditedAmount,
+      });
+      if (refRes.credited) {
+        inviteBonusRewarded = {
+          referrerCode: refRes.referrerCode,
+          bonusAmount: refRes.bonusAmount,
+        };
+      }
+    } catch (invErr) {
+      console.warn('Could not process 100% first-deposit invite bonus:', invErr);
+    }
   }
 
   // 3. Update Firestore deposit_requests record
@@ -667,6 +736,7 @@ export async function approveManualDepositRequest(
     bonusPercent: isFirstDeposit ? bonusPercent : 0,
     bonusAmount: isFirstDeposit ? bonusAmount : 0,
     totalCredited: totalAmountToCredit,
+    inviteBonusRewarded,
   };
 }
 

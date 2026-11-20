@@ -10,6 +10,7 @@ export interface BetState {
   isAutoCashOut: boolean;
   autoCashOutMultiplier: number;
   isAutoBet: boolean;
+  inviteBonusStake?: number; // Portion of bet funded by non-withdrawable, non-profitable 100% Invite Bonus
 }
 
 export interface RoundHistoryItem {

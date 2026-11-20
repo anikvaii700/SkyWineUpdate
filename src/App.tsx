@@ -68,6 +68,17 @@ import {
   logoutPhoneSession,
 } from './services/phoneAuth';
 import { recordUserBet } from './services/userManagement';
+import {
+  captureReferralCodeFromUrl,
+  computeInviteBonusStake,
+  syncInviteBonusBalance,
+} from './services/referralService';
+import {
+  AppControlConfig,
+  getStoredAppControls,
+  subscribeToAppControls,
+  clearAviatorForceCrash,
+} from './services/appControlService';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import { PWAInstallModal } from './components/PWAInstallModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
@@ -76,7 +87,7 @@ import { MobileSideDrawer } from './components/MobileSideDrawer';
 import { ExitModal } from './components/ExitModal';
 import { MarqueeTicker } from './components/MarqueeTicker';
 import { AndroidStudioExportModal } from './components/AndroidStudioExportModal';
-import { Plane, LogOut, Ban } from 'lucide-react';
+import { Plane, LogOut, Ban, ShieldAlert } from 'lucide-react';
 
 const INITIAL_BALANCE = 0; // Starts at 0 for real authenticated accounts
 
@@ -118,6 +129,8 @@ export default function App() {
   const isInitialBroadcastLoadRef = useRef(true);
   const [balanceUpdateNotice, setBalanceUpdateNotice] = useState<string | null>(null);
   const [systemSettings, setSystemSettings] = useState<SystemPaymentSettings>(() => getStoredPaymentSettings());
+  const [appControls, setAppControls] = useState<AppControlConfig>(() => getStoredAppControls());
+  const appControlsRef = useRef<AppControlConfig>(appControls);
   const [userAlertToast, setUserAlertToast] = useState<UserAlertToastData | null>(null);
   const knownDepositStatusesRef = useRef<Record<string, string>>({});
   const knownWithdrawalStatusesRef = useRef<Record<string, string>>({});
@@ -138,6 +151,8 @@ export default function App() {
   const [activeSecondsToday, setActiveSecondsToday] = useState<number>(0);
   const [hasUnclaimedBonus, setHasUnclaimedBonus] = useState<boolean>(false);
   const hasAutoPromptedSpinnerRef = useRef<boolean>(false);
+  const hasAutoPromptedReferralAuthRef = useRef<boolean>(false);
+  const capturedUrlReferralRef = useRef<string | null>(null);
 
   // Win Banner Notification
   const [winNotification, setWinNotification] = useState<{ amount: number; multiplier: number } | null>(null);
@@ -153,6 +168,7 @@ export default function App() {
     isAutoCashOut: false,
     autoCashOutMultiplier: 2.0,
     isAutoBet: false,
+    inviteBonusStake: 0,
   });
 
   const [bet2, setBet2] = useState<BetState>({
@@ -165,6 +181,7 @@ export default function App() {
     isAutoCashOut: false,
     autoCashOutMultiplier: 2.0,
     isAutoBet: false,
+    inviteBonusStake: 0,
   });
 
   // Recent multiplier history
@@ -214,6 +231,7 @@ export default function App() {
   const balanceRef = useRef(balance);
   const userProfileRef = useRef(userProfile);
   const currentUserRef = useRef(currentUser);
+  const inviteBonusBalanceRef = useRef<number>(0);
 
   useEffect(() => {
     balanceRef.current = balance;
@@ -221,11 +239,47 @@ export default function App() {
 
   useEffect(() => {
     userProfileRef.current = userProfile;
+    inviteBonusBalanceRef.current = Math.max(0, userProfile?.inviteBonusBalance || 0);
   }, [userProfile]);
 
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
+
+  // Live Firestore & localStorage subscription to Admin App Controls (Game Control, Limits, Maintenance, Bonuses)
+  useEffect(() => {
+    const unsub = subscribeToAppControls((cfg) => {
+      setAppControls(cfg);
+      appControlsRef.current = cfg;
+    });
+    return () => unsub();
+  }, []);
+
+  // Capture ?ref=CODE from referral link on first load
+  useEffect(() => {
+    const code = captureReferralCodeFromUrl();
+    if (code) {
+      capturedUrlReferralRef.current = code;
+    }
+  }, []);
+
+  // If user arrived via a referral link and is not logged in, open Signup modal automatically once splash finishes
+  useEffect(() => {
+    if (
+      !showSplash &&
+      capturedUrlReferralRef.current &&
+      !hasAutoPromptedReferralAuthRef.current &&
+      !currentUser &&
+      !getActivePhoneSession()
+    ) {
+      hasAutoPromptedReferralAuthRef.current = true;
+      hasAutoPromptedSpinnerRef.current = true;
+      setAuthNoticeMessage(
+        `রেফারেল লিংক (${capturedUrlReferralRef.current}) শনাক্ত হয়েছে! ফ্রি একাউন্ট তৈরি করুন।`
+      );
+      setIsAuthOpen(true);
+    }
+  }, [showSplash, currentUser]);
 
   // Keep track of active modal states for synchronous back-button popstate handling
   const openModalsRef = useRef({
@@ -504,13 +558,57 @@ export default function App() {
       setPendingDepositCount(pendingDep + pendingWth);
     };
 
+    const handleInviteBonusCredited = (e: Event) => {
+      const customEvent = e as CustomEvent<{
+        referrerUid?: string;
+        referrerCode?: string;
+        bonusAmount: number;
+        depositorName?: string;
+      }>;
+      const detail = customEvent.detail;
+      if (!detail || !detail.bonusAmount || detail.bonusAmount <= 0 || !currentUser) return;
+
+      const myCode = (userProfileRef.current?.userCode || currentUser.userCode || '').toUpperCase();
+      const targetCode = (detail.referrerCode || '').toUpperCase();
+      const isMatch =
+        (detail.referrerUid && currentUser.uid === detail.referrerUid) ||
+        (myCode && targetCode && myCode === targetCode);
+
+      if (isMatch) {
+        soundManager.playWin();
+        const amt = Math.round(detail.bonusAmount * 100) / 100;
+        const nextInvite = Math.round((inviteBonusBalanceRef.current + amt) * 100) / 100;
+        inviteBonusBalanceRef.current = nextInvite;
+        setBalance((prev) => Math.round((prev + amt) * 100) / 100);
+        setUserProfile((p) =>
+          p
+            ? {
+                ...p,
+                balance: Math.round(((p.balance || 0) + amt) * 100) / 100,
+                inviteBonusBalance: nextInvite,
+                referralBonusEarned: Math.round(((p.referralBonusEarned || 0) + amt) * 100) / 100,
+                lockedPrincipal: Math.round(((p.lockedPrincipal || 0) + amt) * 100) / 100,
+              }
+            : null
+        );
+        setUserAlertToast({
+          title: '🎁 ১০০% ইনভাইট বোনাস যুক্ত হয়েছে!',
+          message: `আপনার ইনভাইট করা বন্ধু (${detail.depositorName || 'বন্ধু'}) প্রথম ডিপোজিট করায় ৳${amt.toLocaleString()} (১০০%) ইনভাইট বোনাস পেয়েছেন!`,
+          details: 'বি:দ্র: ইনভাইট বোনাসের টাকা উইথড্র করা যাবে না এবং এটি দিয়ে লাভবান হওয়া যাবে না।',
+          type: 'success',
+        });
+      }
+    };
+
     updatePendingCount();
     window.addEventListener('balance_credited', handleBalanceCredited);
+    window.addEventListener('invite_bonus_credited', handleInviteBonusCredited);
     window.addEventListener('deposit_requests_updated', updatePendingCount);
     window.addEventListener('withdrawal_requests_updated', updatePendingCount);
 
     return () => {
       window.removeEventListener('balance_credited', handleBalanceCredited);
+      window.removeEventListener('invite_bonus_credited', handleInviteBonusCredited);
       window.removeEventListener('deposit_requests_updated', updatePendingCount);
       window.removeEventListener('withdrawal_requests_updated', updatePendingCount);
     };
@@ -518,9 +616,11 @@ export default function App() {
 
   // Real-time Firestore listener for logged-in user wallet profile and balance
   const prevRemoteBalanceRef = useRef<number | null>(null);
+  const prevRemoteInviteBonusRef = useRef<number | null>(null);
   useEffect(() => {
     if (!currentUser) {
       prevRemoteBalanceRef.current = null;
+      prevRemoteInviteBonusRef.current = null;
       return;
     }
 
@@ -534,21 +634,43 @@ export default function App() {
       (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data() as UserWalletProfile;
+          const newInviteBal = Math.max(0, Math.round((data.inviteBonusBalance || 0) * 100) / 100);
+          const inviteIncreased =
+            prevRemoteInviteBonusRef.current !== null && newInviteBal > prevRemoteInviteBonusRef.current;
+          const inviteDelta = inviteIncreased
+            ? Math.round((newInviteBal - (prevRemoteInviteBonusRef.current || 0)) * 100) / 100
+            : 0;
+
+          if (inviteIncreased && inviteDelta > 0) {
+            setUserAlertToast({
+              title: '🎁 ১০০% ইনভাইট বোনাস যুক্ত হয়েছে!',
+              message: `আপনার ইনভাইট করা বন্ধু প্রথম ডিপোজিট করায় ৳${inviteDelta.toLocaleString()} (১০০%) ইনভাইট বোনাস আপনার ব্যালেন্সে যোগ হয়েছে!`,
+              details: 'বি:দ্র: ইনভাইট বোনাসের টাকা উইথড্র করা যাবে না এবং এটি দিয়ে লাভবান হওয়া যাবে না।',
+              type: 'success',
+            });
+            soundManager.playWin();
+          }
+
+          prevRemoteInviteBonusRef.current = newInviteBal;
+          inviteBonusBalanceRef.current = newInviteBal;
+
           if (typeof data.balance === 'number') {
             const newBal = Math.max(0, Math.round(data.balance * 100) / 100);
 
             // If balance increased remotely (e.g. admin approved deposit or refunded withdrawal)
             if (prevRemoteBalanceRef.current !== null && newBal > prevRemoteBalanceRef.current) {
               const credited = Math.round((newBal - prevRemoteBalanceRef.current) * 100) / 100;
-              setBalanceUpdateNotice(
-                `🎉 আপনার একাউন্টে ৳ ${credited.toLocaleString()} জমা হয়েছে! বর্তমান ব্যালেন্স: ৳ ${newBal.toLocaleString()}`
-              );
-              soundManager.playWin();
+              if (!inviteIncreased || Math.abs(credited - inviteDelta) > 0.01) {
+                setBalanceUpdateNotice(
+                  `🎉 আপনার একাউন্টে ৳ ${credited.toLocaleString()} জমা হয়েছে! বর্তমান ব্যালেন্স: ৳ ${newBal.toLocaleString()}`
+                );
+                soundManager.playWin();
+              }
             }
 
             prevRemoteBalanceRef.current = newBal;
             setBalance(newBal);
-            setUserProfile((prev) => (prev ? { ...prev, ...data, balance: newBal } : data));
+            setUserProfile((prev) => (prev ? { ...prev, ...data, balance: newBal, inviteBonusBalance: newInviteBal } : { ...data, balance: newBal, inviteBonusBalance: newInviteBal }));
 
             if (currentUser.provider === 'phone') {
               updatePhoneAccountBalanceLocally(currentUser.uid, newBal);
@@ -744,6 +866,28 @@ export default function App() {
     });
   }, [currentUser]);
 
+  // Adjust locked 100% Invite Bonus balance & sync to localStorage + Firestore
+  const adjustInviteBonusBalance = useCallback((delta: number, lockedDelta: number = 0) => {
+    if (!delta && !lockedDelta) return;
+    const nextInvite = Math.max(0, Math.round((inviteBonusBalanceRef.current + delta) * 100) / 100);
+    inviteBonusBalanceRef.current = nextInvite;
+    setUserProfile((p) => {
+      if (!p) return null;
+      const nextLocked =
+        lockedDelta !== 0
+          ? Math.max(0, Math.round(((p.lockedPrincipal || 0) + lockedDelta) * 100) / 100)
+          : p.lockedPrincipal;
+      return {
+        ...p,
+        inviteBonusBalance: nextInvite,
+        ...(lockedDelta !== 0 ? { lockedPrincipal: nextLocked } : {}),
+      };
+    });
+    if (currentUser) {
+      syncInviteBonusBalance(currentUser.uid, nextInvite, lockedDelta);
+    }
+  }, [currentUser]);
+
   // Handle bonus rewards from Lucky Spinner, Daily Open Bonus & 7-Day Streak
   const handleRewardWon = useCallback((amount: number, reason: string) => {
     updateBalanceAndSync((prev) => prev + amount);
@@ -769,6 +913,7 @@ export default function App() {
   useEffect(() => {
     if (!showSplash && !hasAutoPromptedSpinnerRef.current) {
       hasAutoPromptedSpinnerRef.current = true;
+      if (!appControlsRef.current.luckySpinnerEnabled) return;
       const canSpin = isSpinAvailable(currentUser?.uid);
       if (canSpin) {
         const timer = setTimeout(() => {
@@ -903,8 +1048,8 @@ export default function App() {
             try {
               new Notification(latest.title, {
                 body: latest.message,
-                icon: '/skywin-logo.svg',
-                badge: '/icon.svg',
+                icon: '/pwa-192x192.png',
+                badge: '/pwa-192x192.png',
                 tag: latest.id,
               });
             } catch {}
@@ -934,6 +1079,26 @@ export default function App() {
     const hasDeposited = (userProfileRef.current?.totalDeposited || 0) > 0 || Boolean((userProfileRef.current as any)?.hasDeposited);
     const currentBal = balanceRef.current;
     const totalStake = (currentBet1.isPlaced ? currentBet1.amount : 0) + (currentBet2.isPlaced ? currentBet2.amount : 0);
+    const liveControls = appControlsRef.current;
+
+    // Admin One-Shot Forced Crash Point Override (takes top priority except Invite Bonus non-profit protection)
+    const usesInviteBonus =
+      (currentBet1.isPlaced && !currentBet1.cashedOut && (currentBet1.inviteBonusStake || 0) > 0) ||
+      (currentBet2.isPlaced && !currentBet2.cashedOut && (currentBet2.inviteBonusStake || 0) > 0);
+    if (usesInviteBonus) {
+      // Strict 100% Invite Bonus Non-Profit Enforcement:
+      // "বি:দ্র: সেই টাকা যেমন উঠাতে পারবে না, তেমনি সেই টাকা দিয়ে সে কখনই লাভবান ও হতে পারবে না।"
+      return 1.00;
+    }
+
+    if (
+      liveControls.aviatorForceCrashMultiplier !== null &&
+      Number.isFinite(liveControls.aviatorForceCrashMultiplier)
+    ) {
+      const forced = Math.min(100.00, Math.max(1.00, liveControls.aviatorForceCrashMultiplier));
+      clearAviatorForceCrash();
+      return forced;
+    }
 
     // Requirement 7: When user does NOT place any bet in this round, the plane flies up to 100x!
     if (!hasPlacedBet) {
@@ -950,6 +1115,12 @@ export default function App() {
         highPoint = +(85.0 + Math.random() * 15.0).toFixed(2);
       }
       return Math.min(100.00, Math.max(18.00, highPoint));
+    }
+
+    // Admin Strict House Mode: crash early on almost every placed bet
+    if (liveControls.aviatorHouseMode === 'strict') {
+      const strictCrash = +(1.01 + Math.random() * 0.14).toFixed(2); // 1.01x - 1.15x
+      return Math.min(1.15, Math.max(1.00, strictCrash));
     }
 
     // Requirement 1 & 5: Without deposit, user plays with bonus:
@@ -989,7 +1160,7 @@ export default function App() {
     }
     const minAutoCashout = autoCashouts.length > 0 ? Math.min(...autoCashouts) : null;
 
-    if (isNetProfit) {
+    if (liveControls.aviatorHouseMode !== 'relaxed' && isNetProfit) {
       // User is already equal to or in profit beyond their deposits:
       // House protection triggers! Plane crashes early so user loses this bet.
       if (minAutoCashout !== null && minAutoCashout > 1.04) {
@@ -1001,7 +1172,7 @@ export default function App() {
       return Math.min(1.18, Math.max(1.01, earlyCrash));
     }
 
-    if (isCloseToProfit) {
+    if (liveControls.aviatorHouseMode !== 'relaxed' && isCloseToProfit) {
       // User is nearing deposit amount: limit multiplier strictly so they don't surpass admin
       if (minAutoCashout !== null && minAutoCashout >= 1.25) {
         return Math.min(1.20, +(1.03 + Math.random() * 0.16).toFixed(2));
@@ -1104,6 +1275,15 @@ export default function App() {
 
     updateBalanceAndSync((prev) => prev + actualWin);
 
+    // Ironclad safety net: if any invite bonus stake was ever cashed out, lock its entire return back into inviteBonusBalance
+    if (currentBet.inviteBonusStake && currentBet.inviteBonusStake > 0 && currentBet.amount > 0) {
+      const ratio = Math.min(1, currentBet.inviteBonusStake / currentBet.amount);
+      const inviteReturned = Math.round(actualWin * ratio * 100) / 100;
+      if (inviteReturned > 0) {
+        adjustInviteBonusBalance(inviteReturned, inviteReturned);
+      }
+    }
+
     // Requirement 6: "যখন সে খেলা চলাকালিন ক্যাশআউট দেয় ঐ সময় ক্যাশআউট এর পর বিমান ৫০%, ১০০% পর্যন্ত উড়তে থাকবে।"
     const isOtherBetActive1 = bet2StateRef.current.isPlaced && !bet2CashedOutRef.current;
     if (!isOtherBetActive1) {
@@ -1137,7 +1317,7 @@ export default function App() {
       },
       ...prev.slice(0, 19),
     ]);
-  }, [updateBalanceAndSync, currentUser, userProfile, balance]);
+  }, [updateBalanceAndSync, adjustInviteBonusBalance, currentUser, userProfile, balance]);
 
   // Cash out handler for Panel 2 (strictly executed once)
   const handleCashOutPanel2 = useCallback((multiplierSnapshot?: unknown) => {
@@ -1164,6 +1344,15 @@ export default function App() {
     }));
 
     updateBalanceAndSync((prev) => prev + actualWin);
+
+    // Ironclad safety net: if any invite bonus stake was ever cashed out, lock its entire return back into inviteBonusBalance
+    if (currentBet.inviteBonusStake && currentBet.inviteBonusStake > 0 && currentBet.amount > 0) {
+      const ratio = Math.min(1, currentBet.inviteBonusStake / currentBet.amount);
+      const inviteReturned = Math.round(actualWin * ratio * 100) / 100;
+      if (inviteReturned > 0) {
+        adjustInviteBonusBalance(inviteReturned, inviteReturned);
+      }
+    }
 
     // Requirement 6: "যখন সে খেলা চলাকালিন ক্যাশআউট দেয় ঐ সময় ক্যাশআউট এর পর বিমান ৫০%, ১০০% পর্যন্ত উড়তে থাকবে।"
     const isOtherBetActive2 = bet1StateRef.current.isPlaced && !bet1CashedOutRef.current;
@@ -1198,7 +1387,7 @@ export default function App() {
       },
       ...prev.slice(0, 19),
     ]);
-  }, [updateBalanceAndSync, currentUser, userProfile, balance]);
+  }, [updateBalanceAndSync, adjustInviteBonusBalance, currentUser, userProfile, balance]);
 
   // Main Game Loop: WAITING -> FLYING -> CRASHED
   useEffect(() => {
@@ -1220,13 +1409,54 @@ export default function App() {
       }
 
       // Check auto bets (Strict: Only if user has account!)
-      if (currentUser && bet1.isAutoBet && !bet1.isPlaced && balance >= bet1.amount) {
-        setBalance((prev) => prev - bet1.amount);
-        setBet1((prev) => ({ ...prev, isPlaced: true, cashedOut: false, winAmount: null }));
+      const hasDepositedAuto = Boolean(
+        userProfileRef.current?.hasDeposited ||
+        (userProfileRef.current?.totalDeposited && userProfileRef.current.totalDeposited > 0)
+      );
+      let availBal = balance;
+      let availInvite = inviteBonusBalanceRef.current;
+
+      if (currentUser && bet1.isAutoBet && !bet1.isPlaced && availBal >= bet1.amount) {
+        const inviteUsed1 = computeInviteBonusStake({
+          totalBalance: availBal,
+          inviteBonusBalance: availInvite,
+          stake: bet1.amount,
+          hasDeposited: hasDepositedAuto,
+        });
+        availBal = Math.max(0, Math.round((availBal - bet1.amount) * 100) / 100);
+        availInvite = Math.max(0, Math.round((availInvite - inviteUsed1) * 100) / 100);
+        updateBalanceAndSync((prev) => prev - bet1.amount);
+        if (inviteUsed1 > 0) {
+          adjustInviteBonusBalance(-inviteUsed1, -inviteUsed1);
+        }
+        setBet1((prev) => ({
+          ...prev,
+          isPlaced: true,
+          cashedOut: false,
+          winAmount: null,
+          inviteBonusStake: inviteUsed1,
+        }));
       }
-      if (currentUser && bet2.isAutoBet && !bet2.isPlaced && balance >= bet2.amount) {
-        setBalance((prev) => prev - bet2.amount);
-        setBet2((prev) => ({ ...prev, isPlaced: true, cashedOut: false, winAmount: null }));
+      if (currentUser && bet2.isAutoBet && !bet2.isPlaced && availBal >= bet2.amount) {
+        const inviteUsed2 = computeInviteBonusStake({
+          totalBalance: availBal,
+          inviteBonusBalance: availInvite,
+          stake: bet2.amount,
+          hasDeposited: hasDepositedAuto,
+        });
+        availBal = Math.max(0, Math.round((availBal - bet2.amount) * 100) / 100);
+        availInvite = Math.max(0, Math.round((availInvite - inviteUsed2) * 100) / 100);
+        updateBalanceAndSync((prev) => prev - bet2.amount);
+        if (inviteUsed2 > 0) {
+          adjustInviteBonusBalance(-inviteUsed2, -inviteUsed2);
+        }
+        setBet2((prev) => ({
+          ...prev,
+          isPlaced: true,
+          cashedOut: false,
+          winAmount: null,
+          inviteBonusStake: inviteUsed2,
+        }));
       }
 
       // 5-second countdown
@@ -1280,26 +1510,30 @@ export default function App() {
           })
         );
 
-        // Check Auto Cash Out Panel 1 (strictly once)
+        // Check Auto Cash Out Panel 1 (strictly once, only if below crash target and not using invite bonus)
         if (
           !bet1CashedOutRef.current &&
           bet1StateRef.current.isPlaced &&
           !bet1StateRef.current.cashedOut &&
           bet1StateRef.current.isAutoCashOut &&
+          !(bet1StateRef.current.inviteBonusStake && bet1StateRef.current.inviteBonusStake > 0) &&
+          bet1StateRef.current.autoCashOutMultiplier < crashTargetRef.current &&
           roundedMult >= bet1StateRef.current.autoCashOutMultiplier
         ) {
-          handleCashOutPanel1(roundedMult);
+          handleCashOutPanel1(bet1StateRef.current.autoCashOutMultiplier);
         }
 
-        // Check Auto Cash Out Panel 2 (strictly once)
+        // Check Auto Cash Out Panel 2 (strictly once, only if below crash target and not using invite bonus)
         if (
           !bet2CashedOutRef.current &&
           bet2StateRef.current.isPlaced &&
           !bet2StateRef.current.cashedOut &&
           bet2StateRef.current.isAutoCashOut &&
+          !(bet2StateRef.current.inviteBonusStake && bet2StateRef.current.inviteBonusStake > 0) &&
+          bet2StateRef.current.autoCashOutMultiplier < crashTargetRef.current &&
           roundedMult >= bet2StateRef.current.autoCashOutMultiplier
         ) {
-          handleCashOutPanel2(roundedMult);
+          handleCashOutPanel2(bet2StateRef.current.autoCashOutMultiplier);
         }
 
         if (roundedMult >= crashTargetRef.current || roundedMult >= 100.00) {
@@ -1376,6 +1610,7 @@ export default function App() {
           cashedOut: false,
           cashedOutMultiplier: null,
           winAmount: null,
+          inviteBonusStake: 0,
         }));
         setBet2((prev) => ({
           ...prev,
@@ -1383,6 +1618,7 @@ export default function App() {
           cashedOut: false,
           cashedOutMultiplier: null,
           winAmount: null,
+          inviteBonusStake: 0,
         }));
         setRoundStatus('WAITING');
       }, 2800);
@@ -1444,6 +1680,15 @@ export default function App() {
       });
       return;
     }
+    if (!appControlsRef.current.depositsEnabled) {
+      soundManager.playCrash();
+      setUserAlertToast({
+        title: 'ডিপোজিট সাময়িকভাবে বন্ধ',
+        message: 'এডমিন কর্তৃক ডিপোজিট সার্ভিস সাময়িকভাবে বন্ধ রাখা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।',
+        type: 'warning',
+      });
+      return;
+    }
     setWalletTab('deposit');
     setIsDepositOpen(true);
   }, [currentUser, suspensionInfo, handleRequireAuth]);
@@ -1459,6 +1704,15 @@ export default function App() {
         title: suspensionInfo.isBanned ? 'একাউন্ট ব্যান করা হয়েছে' : 'একাউন্ট সাময়িকভাবে স্থগিত',
         message: suspensionInfo.reason || 'আপনার একাউন্টটির কার্যক্রম স্থগিত রাখা হয়েছে।',
         type: 'error',
+      });
+      return;
+    }
+    if (!appControlsRef.current.withdrawalsEnabled) {
+      soundManager.playCrash();
+      setUserAlertToast({
+        title: 'উইথড্র সাময়িকভাবে বন্ধ',
+        message: 'এডমিন কর্তৃক উত্তোলন সার্ভিস সাময়িকভাবে বন্ধ রাখা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।',
+        type: 'warning',
       });
       return;
     }
@@ -1485,8 +1739,27 @@ export default function App() {
     if (balance < amount) return;
     soundManager.playClick();
     bet1CashedOutRef.current = false;
+    const hasDeposited1 = Boolean(
+      userProfile?.hasDeposited || (userProfile?.totalDeposited && userProfile.totalDeposited > 0)
+    );
+    const inviteUsed1 = computeInviteBonusStake({
+      totalBalance: balanceRef.current,
+      inviteBonusBalance: inviteBonusBalanceRef.current,
+      stake: amount,
+      hasDeposited: hasDeposited1,
+    });
     updateBalanceAndSync((prev) => prev - amount);
-    setBet1((prev) => ({ ...prev, amount, isPlaced: true, cashedOut: false, winAmount: null }));
+    if (inviteUsed1 > 0) {
+      adjustInviteBonusBalance(-inviteUsed1, -inviteUsed1);
+    }
+    setBet1((prev) => ({
+      ...prev,
+      amount,
+      isPlaced: true,
+      cashedOut: false,
+      winAmount: null,
+      inviteBonusStake: inviteUsed1,
+    }));
   };
 
   const handleCancelBetPanel1 = () => {
@@ -1494,7 +1767,10 @@ export default function App() {
     soundManager.playClick();
     bet1CashedOutRef.current = false;
     updateBalanceAndSync((prev) => prev + bet1.amount);
-    setBet1((prev) => ({ ...prev, isPlaced: false }));
+    if (bet1.inviteBonusStake && bet1.inviteBonusStake > 0) {
+      adjustInviteBonusBalance(bet1.inviteBonusStake, bet1.inviteBonusStake);
+    }
+    setBet1((prev) => ({ ...prev, isPlaced: false, inviteBonusStake: 0 }));
   };
 
   const handlePlaceBetPanel2 = (amount: number) => {
@@ -1515,8 +1791,27 @@ export default function App() {
     if (balance < amount) return;
     soundManager.playClick();
     bet2CashedOutRef.current = false;
+    const hasDeposited2 = Boolean(
+      userProfile?.hasDeposited || (userProfile?.totalDeposited && userProfile.totalDeposited > 0)
+    );
+    const inviteUsed2 = computeInviteBonusStake({
+      totalBalance: balanceRef.current,
+      inviteBonusBalance: inviteBonusBalanceRef.current,
+      stake: amount,
+      hasDeposited: hasDeposited2,
+    });
     updateBalanceAndSync((prev) => prev - amount);
-    setBet2((prev) => ({ ...prev, amount, isPlaced: true, cashedOut: false, winAmount: null }));
+    if (inviteUsed2 > 0) {
+      adjustInviteBonusBalance(-inviteUsed2, -inviteUsed2);
+    }
+    setBet2((prev) => ({
+      ...prev,
+      amount,
+      isPlaced: true,
+      cashedOut: false,
+      winAmount: null,
+      inviteBonusStake: inviteUsed2,
+    }));
   };
 
   const handleCancelBetPanel2 = () => {
@@ -1524,10 +1819,49 @@ export default function App() {
     soundManager.playClick();
     bet2CashedOutRef.current = false;
     updateBalanceAndSync((prev) => prev + bet2.amount);
-    setBet2((prev) => ({ ...prev, isPlaced: false }));
+    if (bet2.inviteBonusStake && bet2.inviteBonusStake > 0) {
+      adjustInviteBonusBalance(bet2.inviteBonusStake, bet2.inviteBonusStake);
+    }
+    setBet2((prev) => ({ ...prev, isPlaced: false, inviteBonusStake: 0 }));
   };
 
-  // Complete Direct Exit: Closes app and returns straight to mobile's default home screen without showing any exit screen
+  const handleOpenBonusHub = useCallback(() => {
+    if (!appControlsRef.current.dailyBonusEnabled && !appControlsRef.current.inviteBonusEnabled) {
+      setUserAlertToast({
+        title: 'বোনাস সাময়িকভাবে বন্ধ',
+        message: 'বোনাস হাব বর্তমানে এডমিন কর্তৃক সাময়িকভাবে বন্ধ রাখা হয়েছে।',
+        type: 'info',
+      });
+      return;
+    }
+    setIsBonusHubOpen(true);
+  }, []);
+
+  const handleOpenSpinner = useCallback(() => {
+    if (!appControlsRef.current.luckySpinnerEnabled) {
+      setUserAlertToast({
+        title: 'লাকি স্পিনার বন্ধ আছে',
+        message: 'লাকি স্পিনার বর্তমানে এডমিন কর্তৃক সাময়িকভাবে বন্ধ রাখা হয়েছে।',
+        type: 'info',
+      });
+      return;
+    }
+    setIsSpinnerOpen(true);
+  }, []);
+
+  const handleTogglePredictor = useCallback(() => {
+    if (!appControlsRef.current.aiPredictorEnabled) {
+      setIsPredictorOpen(false);
+      setUserAlertToast({
+        title: 'AI সিগন্যাল বন্ধ আছে',
+        message: 'AI সিগন্যাল প্রেডিক্টর বর্তমানে এডমিন কর্তৃক বন্ধ রাখা হয়েছে।',
+        type: 'info',
+      });
+      return;
+    }
+    setIsPredictorOpen((prev) => !prev);
+  }, []);
+
   // Complete Direct Exit: Closes app and returns straight to mobile's default home screen without looping
   const handleExitApp = useCallback(() => {
     isExitingRef.current = true;
@@ -1637,7 +1971,7 @@ export default function App() {
               setIsAdminOpen(true);
             }
           }}
-          onOpenBonusHub={() => setIsBonusHubOpen(true)}
+          onOpenBonusHub={handleOpenBonusHub}
           hasUnclaimedBonus={hasUnclaimedBonus}
           pendingDepositCount={pendingDepositCount}
           isMuted={isMuted}
@@ -1649,7 +1983,7 @@ export default function App() {
           lang={lang}
           onToggleLang={() => setLang((prev) => (prev === 'bn' ? 'en' : 'bn'))}
           isPredictorOpen={isPredictorOpen}
-          onTogglePredictor={() => setIsPredictorOpen((prev) => !prev)}
+          onTogglePredictor={handleTogglePredictor}
           onOpenInstallModal={() => setIsInstallModalOpen(true)}
           isAppInstalled={isAppInstalled}
         />
@@ -1657,10 +1991,37 @@ export default function App() {
         {/* Right-to-Left Scrolling Announcement Banner ("শিরোনাম") */}
         <MarqueeTicker />
 
+        {/* Admin Maintenance Active Indicator (Only visible to Admin when Maintenance Mode is ON) */}
+        {appControls.maintenanceMode && isUserAdminAccount(currentUser?.phoneNumber) && (
+          <div className="bg-rose-950/80 border-b border-rose-500/50 px-3 py-1.5 flex items-center justify-between text-[11px] text-rose-200 font-bold">
+            <span className="flex items-center gap-1.5">
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+              <span>মেইনটেন্যান্স মোড চালু আছে (শুধু এডমিন অ্যাক্সেস)</span>
+            </span>
+            <button
+              onClick={() => setIsAdminOpen(true)}
+              className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black cursor-pointer"
+            >
+              Admin
+            </button>
+          </div>
+        )}
+
         {/* Main Container */}
         <main className="flex-1 w-full max-w-full p-1.5 sm:p-2 flex flex-col gap-2 relative pb-24 overflow-x-hidden box-border">
         {/* Aviator Mode */}
-        {activeGameTab === 'AVIATOR' && (
+        {activeGameTab === 'AVIATOR' && !appControls.aviatorEnabled && (
+          <div className="bg-[#111827] border border-amber-500/40 rounded-2xl p-8 text-center space-y-3 my-4">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-400 mx-auto flex items-center justify-center">
+              <Plane className="w-7 h-7" />
+            </div>
+            <h3 className="text-base font-black text-white">Aviator গেম সাময়িকভাবে বন্ধ আছে</h3>
+            <p className="text-xs text-slate-400">
+              সার্ভার আপডেটের জন্য Aviator গেমটি সাময়িকভাবে বিরতিতে রাখা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।
+            </p>
+          </div>
+        )}
+        {activeGameTab === 'AVIATOR' && appControls.aviatorEnabled && (
           <>
             {/* Multiplier History Ribbon */}
             <HistoryRibbon history={history} />
@@ -1685,12 +2046,14 @@ export default function App() {
               )}
 
               {/* AI Signal Predictor widget */}
-              <AIPredictorModal
-                isOpen={isPredictorOpen}
-                onClose={() => setIsPredictorOpen(false)}
-                recentMultipliers={history.map((h) => h.crashMultiplier)}
-                roundStatus={roundStatus}
-              />
+              {appControls.aiPredictorEnabled && (
+                <AIPredictorModal
+                  isOpen={isPredictorOpen}
+                  onClose={() => setIsPredictorOpen(false)}
+                  recentMultipliers={history.map((h) => h.crashMultiplier)}
+                  roundStatus={roundStatus}
+                />
+              )}
             </div>
 
             {/* Dual Betting Controls: Panel 1 & Panel 2 (Both visible simultaneously in same view - no tab switching) */}
@@ -1754,12 +2117,28 @@ export default function App() {
         )}
 
         {/* Wingo Mode */}
-        {activeGameTab === 'WINGO' && (
+        {activeGameTab === 'WINGO' && !appControls.wingoEnabled && (
+          <div className="bg-[#111827] border border-cyan-500/40 rounded-2xl p-8 text-center space-y-3 my-4">
+            <div className="w-14 h-14 rounded-2xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-400 mx-auto flex items-center justify-center">
+              <ShieldAlert className="w-7 h-7" />
+            </div>
+            <h3 className="text-base font-black text-white">Wingo গেম সাময়িকভাবে বন্ধ আছে</h3>
+            <p className="text-xs text-slate-400">
+              রক্ষণাবেক্ষণের জন্য Wingo গেমটি সাময়িকভাবে বন্ধ রাখা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।
+            </p>
+          </div>
+        )}
+        {activeGameTab === 'WINGO' && appControls.wingoEnabled && (
           <WingoGame
             balance={balance}
             currentUser={currentUser}
             onRequireAuth={handleRequireAuth}
             onUpdateBalance={(delta) => updateBalanceAndSync((prev) => prev + delta)}
+            inviteBonusBalance={userProfile?.inviteBonusBalance ?? 0}
+            hasDeposited={Boolean(
+              userProfile?.hasDeposited || (userProfile?.totalDeposited && userProfile.totalDeposited > 0)
+            )}
+            onAdjustInviteBonus={adjustInviteBonusBalance}
             lang={lang}
           />
         )}
@@ -1911,7 +2290,7 @@ export default function App() {
           }
         }}
         isPredictorOpen={isPredictorOpen}
-        onTogglePredictor={() => setIsPredictorOpen((prev) => !prev)}
+        onTogglePredictor={handleTogglePredictor}
         isMuted={isMuted}
         onToggleSound={() => {
           const next = !isMuted;
@@ -1925,15 +2304,15 @@ export default function App() {
         onExitApp={() => setIsExitModalOpen(true)}
         telegramChannel={systemSettings.telegramChannel}
         telegramSupport={systemSettings.telegramSupport}
-        onOpenBonusHub={() => setIsBonusHubOpen(true)}
-        onOpenSpinner={() => setIsSpinnerOpen(true)}
+        onOpenBonusHub={handleOpenBonusHub}
+        onOpenSpinner={handleOpenSpinner}
       />
 
       {/* Admin Broadcast Notification Dialog Modal */}
       <BroadcastNoticeModal
         notification={activeBroadcastNotice}
         onClose={() => setActiveBroadcastNotice(null)}
-        onOpenBonus={() => setIsBonusHubOpen(true)}
+        onOpenBonus={handleOpenBonusHub}
       />
 
       {/* Daily Bonus & 7-Day Streak Hub Modal */}
@@ -1941,8 +2320,10 @@ export default function App() {
         isOpen={isBonusHubOpen}
         onClose={() => setIsBonusHubOpen(false)}
         currentUser={currentUser}
+        userProfile={userProfile}
+        onOpenAuth={(notice) => handleRequireAuth(notice || 'ইনভাইট বোনাস ১০০% পেতে প্রথমে একাউন্ট তৈরি বা লগইন করুন!')}
         onRewardWon={handleRewardWon}
-        onOpenSpinner={() => setIsSpinnerOpen(true)}
+        onOpenSpinner={handleOpenSpinner}
         activeSecondsToday={activeSecondsToday}
       />
 
@@ -1952,7 +2333,7 @@ export default function App() {
         onClose={() => setIsSpinnerOpen(false)}
         currentUser={currentUser}
         onRewardWon={handleRewardWon}
-        onOpenStreakHub={() => setIsBonusHubOpen(true)}
+        onOpenStreakHub={handleOpenBonusHub}
       />
 
       {/* Phone Default Back Button & Double Back / Double Click Exit Confirmation Modal */}
@@ -2000,6 +2381,33 @@ export default function App() {
             >
               <LogOut className="w-4 h-4 font-bold" />
               <span>লগআউট করুন</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* System Maintenance Mode Overlay (Admin account bypasses this screen) */}
+      {Boolean(appControls.maintenanceMode && !isUserAdminAccount(currentUser?.phoneNumber)) && (
+        <div className="fixed inset-0 z-[145] flex items-center justify-center bg-[#070a12]/96 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="bg-[#101726] border-2 border-amber-500/50 rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl text-center space-y-4">
+            <div className="w-16 h-16 rounded-full bg-amber-500/15 border-2 border-amber-500/50 text-amber-400 mx-auto flex items-center justify-center shadow-lg">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-white">অ্যাপ রক্ষণাবেক্ষণ চলছে</h3>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                {appControls.maintenanceMessage || 'সিস্টেম আপগ্রেডের কাজ চলছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthNoticeMessage(null);
+                setIsAuthOpen(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#1a2436] hover:bg-[#24324a] text-slate-300 text-xs font-bold cursor-pointer"
+            >
+              একাউন্ট লগইন
             </button>
           </div>
         </div>

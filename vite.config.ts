@@ -11,14 +11,22 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['apple-touch-icon.png', 'icon.svg'],
+        includeAssets: [
+          'apple-touch-icon.png',
+          'favicon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-192x192.png',
+          'pwa-maskable-512x512.png',
+          'assets/aistudio/SkyWinBD_Airborne_Logo_0dd77831.webp',
+        ],
         manifest: {
           id: '/',
           name: 'SkyWin BD Mobile App',
           short_name: 'SkyWin BD',
           description: 'Official SkyWin BD Aviator crash simulator and Wingo game with dual betting panels, exponential flight curve, AI signal predictor, and Bangladeshi Taka (৳) balance.',
-          theme_color: '#111622',
-          background_color: '#0a0e17',
+          theme_color: '#000B2C',
+          background_color: '#000B2C',
           display: 'standalone',
           orientation: 'portrait',
           start_url: '/',
@@ -37,6 +45,12 @@ export default defineConfig(() => {
               purpose: 'any',
             },
             {
+              src: '/pwa-maskable-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+            {
               src: '/pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
@@ -46,7 +60,7 @@ export default defineConfig(() => {
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
           skipWaiting: true,
           clientsClaim: true,
           cleanupOutdatedCaches: true,

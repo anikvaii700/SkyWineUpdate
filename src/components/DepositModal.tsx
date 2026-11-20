@@ -34,6 +34,7 @@ import {
   getStoredWithdrawalRequests,
   submitManualWithdrawalRequest,
 } from '../services/manualPayment';
+import { getStoredAppControls } from '../services/appControlService';
 
 interface DepositModalProps {
   isOpen: boolean;
@@ -201,6 +202,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   const getUserBonusBreakdown = () => {
     let initialBonus = 100;
     let refBonus = 0;
+    let inviteBonusBal: number | undefined = undefined;
     let firstDepBonus = 0;
     let rewardBonus = 0;
     let explicitLocked = 100;
@@ -215,6 +217,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       if (acc) {
         initialBonus = acc.initialBonus !== undefined ? acc.initialBonus : 100;
         refBonus = acc.referralBonusEarned || 0;
+        inviteBonusBal = acc.inviteBonusBalance !== undefined ? acc.inviteBonusBalance : refBonus;
         firstDepBonus = acc.firstDepositBonusEarned || 0;
         rewardBonus = acc.rewardBonusEarned || 0;
         explicitLocked = acc.lockedPrincipal || 0;
@@ -224,6 +227,10 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       } else {
         initialBonus = 100;
         refBonus = phoneSession.profile.referralBonusEarned || 0;
+        inviteBonusBal =
+          phoneSession.profile.inviteBonusBalance !== undefined
+            ? phoneSession.profile.inviteBonusBalance
+            : refBonus;
         firstDepBonus = (phoneSession.profile as any).firstDepositBonusEarned || 0;
         rewardBonus = (phoneSession.profile as any).rewardBonusEarned || 0;
         explicitLocked = phoneSession.profile.lockedPrincipal || 0;
@@ -232,8 +239,10 @@ export const DepositModal: React.FC<DepositModalProps> = ({
         isFirstTime = !hasDeposited;
       }
     } else if (userProfile) {
-      initialBonus = 100;
+      initialBonus = userProfile.initialBonus !== undefined ? userProfile.initialBonus : 100;
       refBonus = userProfile.referralBonusEarned || 0;
+      inviteBonusBal =
+        userProfile.inviteBonusBalance !== undefined ? userProfile.inviteBonusBalance : refBonus;
       firstDepBonus = (userProfile as any).firstDepositBonusEarned || 0;
       rewardBonus = (userProfile as any).rewardBonusEarned || 0;
       explicitLocked = userProfile.lockedPrincipal || 0;
@@ -242,9 +251,17 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       isFirstTime = !hasDeposited;
     }
 
+    // Prefer live Firestore userProfile inviteBonusBalance if available
+    if (userProfile && typeof userProfile.inviteBonusBalance === 'number') {
+      inviteBonusBal = userProfile.inviteBonusBalance;
+    }
+
+    const activeInviteBonus = inviteBonusBal !== undefined ? inviteBonusBal : refBonus;
+
     const totalLockedBonuses = calculateTotalLockedBonuses({
       initialBonus,
       referralBonusEarned: refBonus,
+      inviteBonusBalance: activeInviteBonus,
       firstDepositBonusEarned: firstDepBonus,
       rewardBonusEarned: rewardBonus,
       lockedPrincipal: explicitLocked,
@@ -254,7 +271,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
     return {
       initialBonus,
-      refBonus,
+      refBonus: activeInviteBonus,
       firstDepBonus,
       rewardBonus,
       totalLockedBonuses,
@@ -284,8 +301,22 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       return;
     }
 
-    if (!depositAmount || depositAmount < 50) {
-      setSubmissionError('নূন্যতম ডিপোজিটের পরিমাণ ৫০ ৳');
+    const appControls = getStoredAppControls();
+    if (!appControls.depositsEnabled) {
+      setSubmissionError('ডিপোজিট সার্ভিসটি এডমিন কর্তৃক সাময়িকভাবে বন্ধ রাখা হয়েছে। কিছুক্ষণ পর চেষ্টা করুন।');
+      soundManager.playCrash();
+      return;
+    }
+
+    const minDep = Math.max(10, appControls.minDepositAmount || 100);
+    const maxDep = Math.max(minDep, appControls.maxDepositAmount || 50000);
+    if (!depositAmount || depositAmount < minDep) {
+      setSubmissionError(`নূন্যতম ডিপোজিটের পরিমাণ ৳ ${minDep.toLocaleString()}`);
+      soundManager.playCrash();
+      return;
+    }
+    if (depositAmount > maxDep) {
+      setSubmissionError(`সর্বোচ্চ ডিপোজিটের পরিমাণ ৳ ${maxDep.toLocaleString()}`);
       soundManager.playCrash();
       return;
     }
@@ -368,13 +399,29 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       return;
     }
 
-    if (!withdrawAmount || withdrawAmount < 500) {
-      setWithdrawError('ক্যাশআউট মিনিমাম ৫০০ টাকা হতে হবে।');
+    const appControls = getStoredAppControls();
+    if (!appControls.withdrawalsEnabled) {
+      setWithdrawError('উত্তোলন সার্ভিসটি এডমিন কর্তৃক সাময়িকভাবে বন্ধ রাখা হয়েছে। কিছুক্ষণ পর চেষ্টা করুন।');
       soundManager.playCrash();
       return;
     }
 
-    if (withdrawableAmount < 500) {
+    const minWth = Math.max(50, appControls.minWithdrawAmount || 500);
+    const maxWth = Math.max(minWth, appControls.maxWithdrawAmount || 50000);
+
+    if (!withdrawAmount || withdrawAmount < minWth) {
+      setWithdrawError(`ক্যাশআউট মিনিমাম ৳ ${minWth.toLocaleString()} টাকা হতে হবে।`);
+      soundManager.playCrash();
+      return;
+    }
+
+    if (withdrawAmount > maxWth) {
+      setWithdrawError(`একবারে সর্বোচ্চ উত্তোলন সীমা ৳ ${maxWth.toLocaleString()} টাকা।`);
+      soundManager.playCrash();
+      return;
+    }
+
+    if (withdrawableAmount < minWth) {
       setWithdrawError(
         `বোনাস ও কমিশন ব্যালেন্স (৳${totalLockedBonuses.toLocaleString()}) উত্তোলনযোগ্য নয়, শুধুমাত্র গেম খেলে উইন হওয়া টাকা উত্তোলন করতে পারবেন। আপনার বর্তমান উত্তোলনযোগ্য ব্যালেন্স ৳ ${withdrawableAmount.toLocaleString()}।`
       );
@@ -1266,7 +1313,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                         <span>• ১ম ডিপোজিট বোনাস: <strong className="text-amber-300">৳{bonusInfo.firstDepBonus.toLocaleString()}</strong></span>
                       )}
                       {bonusInfo.refBonus > 0 && (
-                        <span>• রেফার কমিশন: <strong className="text-amber-300">৳{bonusInfo.refBonus.toLocaleString()}</strong></span>
+                        <span>• ইনভাইট বোনাস ১০০% (লকড): <strong className="text-cyan-300">৳{bonusInfo.refBonus.toLocaleString()}</strong></span>
                       )}
                       {bonusInfo.rewardBonus > 0 && (
                         <span>• রিওয়ার্ড বোনাস: <strong className="text-amber-300">৳{bonusInfo.rewardBonus.toLocaleString()}</strong></span>
@@ -1280,8 +1327,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                       <span>ক্যাশআউট ও বোনাস নীতিমালা:</span>
                     </p>
                     <ul className="space-y-0.5 list-disc pl-3.5 text-slate-300 text-[10px]">
-                      <li><strong>বোনাস ও কমিশন:</strong> সকল এক্সট্রা টাকা (ওয়েলকাম বোনাস, ১ম ডিপোজিট বোনাস %, রেফার কমিশন) কখনই সরাসরি উইথড্র দেওয়া যাবে না।</li>
-                      <li><strong>উত্তোলনযোগ্য অর্থ:</strong> শুধুমাত্র গেম খেলে উইন হওয়া টাকা উইথড্র দিতে পারবেন।</li>
+                      <li><strong>বোনাস ও ইনভাইট বোনাস ১০০%:</strong> সকল বোনাস টাকা (ওয়েলকাম, ১ম ডিপোজিট, ইনভাইট বোনাস ১০০%) কখনই উত্তোলন করা যাবে না এবং ইনভাইট বোনাস দিয়ে লাভবান হওয়া যাবে না।</li>
+                      <li><strong>উত্তোলনযোগ্য অর্থ:</strong> শুধুমাত্র নিজস্ব ডিপোজিট থেকে গেম খেলে উইন হওয়া টাকা উইথড্র দিতে পারবেন।</li>
                       <li><strong>সীমা:</strong> মিনিমাম ক্যাশআউট <strong>৳ ৫০০</strong> এবং একাউন্টে সর্বনিম্ন <strong>৳ ১০০</strong> ব্যালেন্স সংরক্ষিত থাকতে হবে।</li>
                     </ul>
                   </div>

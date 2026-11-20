@@ -8,6 +8,15 @@ import {
   Sparkles,
   Timer,
   ArrowRight,
+  Users,
+  Link2,
+  Copy,
+  Check,
+  Share2,
+  Lock,
+  AlertTriangle,
+  Clock,
+  UserPlus,
 } from 'lucide-react';
 import { soundManager } from '../services/audio';
 import {
@@ -17,14 +26,18 @@ import {
   formatTimeMMSS,
   BonusState,
 } from '../services/bonusService';
-import { AppUser } from '../services/phoneAuth';
+import { AppUser, ReferralRecord } from '../services/phoneAuth';
+import { UserWalletProfile } from '../services/firebase';
+import { buildReferralLink, listenToUserReferrals } from '../services/referralService';
 
 interface DailyBonusModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: AppUser | null;
+  userProfile?: UserWalletProfile | null;
   onRewardWon: (amount: number, reason: string) => void;
   onOpenSpinner: () => void;
+  onOpenAuth?: (notice?: string) => void;
   activeSecondsToday: number;
 }
 
@@ -32,13 +45,17 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
   isOpen,
   onClose,
   currentUser,
+  userProfile,
   onRewardWon,
   onOpenSpinner,
+  onOpenAuth,
   activeSecondsToday,
 }) => {
   const [bonusState, setBonusState] = useState<BonusState>(() => loadBonusState(currentUser?.uid));
-  const [isClaimingDaily, setIsClaimingDaily] = useState(false);
-  const [claimSuccessMsg, setClaimSuccessMsg] = useState('');
+  const [referrals, setReferrals] = useState<ReferralRecord[]>([]);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [showFriendsList, setShowFriendsList] = useState(false);
 
   const syncState = () => {
     const state = loadBonusState(currentUser?.uid);
@@ -48,7 +65,6 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       syncState();
-      setClaimSuccessMsg('');
     }
   }, [isOpen, currentUser]);
 
@@ -66,6 +82,25 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
     return () => window.removeEventListener('skywin_bonus_state_updated', handleUpdated);
   }, [isOpen]);
 
+  const userRefCode =
+    userProfile?.referralCode ||
+    userProfile?.userCode ||
+    currentUser?.referralCode ||
+    currentUser?.userCode ||
+    (currentUser ? `USER-${currentUser.uid.slice(-5).toUpperCase()}` : '');
+
+  // Real-time listener for user's invited friends & 100% first-deposit rewards
+  useEffect(() => {
+    if (!isOpen || !currentUser || !userRefCode) {
+      setReferrals([]);
+      return;
+    }
+    const unsub = listenToUserReferrals(userRefCode, currentUser.uid, (records) => {
+      setReferrals(records);
+    });
+    return () => unsub();
+  }, [isOpen, currentUser?.uid, userRefCode]);
+
   if (!isOpen) return null;
 
   const today = getLocalDateString();
@@ -76,9 +111,57 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
   const progressPercent = Math.min(100, Math.round((currentSeconds / TARGET_STREAK_SECONDS) * 100));
   const isFiveMinDone = currentSeconds >= TARGET_STREAK_SECONDS || bonusState.todayQualified;
 
+  // Invite Bonus 100% stats
+  const referralLink = userRefCode ? buildReferralLink(userRefCode) : '';
+  const totalInvited = Math.max(userProfile?.referralCount || 0, referrals.length);
+  const rewardedFriends = referrals.filter((r) => r.status === 'rewarded' || (r.bonusAmount || 0) > 0);
+  const totalInviteBonusEarned = Math.max(
+    userProfile?.referralBonusEarned || 0,
+    referrals.reduce((sum, r) => sum + (r.bonusAmount || 0), 0)
+  );
+  const activeInviteBonusBalance = userProfile?.inviteBonusBalance ?? 0;
+
+  const handleCopyLink = () => {
+    if (!referralLink) return;
+    navigator.clipboard.writeText(referralLink).catch(() => {});
+    setCopiedLink(true);
+    soundManager.playClick();
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const handleCopyCode = () => {
+    if (!userRefCode) return;
+    navigator.clipboard.writeText(userRefCode).catch(() => {});
+    setCopiedCode(true);
+    soundManager.playClick();
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const handleShareLink = async () => {
+    if (!referralLink) return;
+    soundManager.playClick();
+    const shareText = `SkyWin BD-তে আমার রেফারেল লিংক দিয়ে একাউন্ট করুন! রেফার কোড: ${userRefCode}\n${referralLink}`;
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: 'SkyWin BD — ইনভাইট বোনাস ১০০%',
+          text: shareText,
+          url: referralLink,
+        });
+        return;
+      } catch {
+        // Fallback to copy
+      }
+    }
+    handleCopyLink();
+  };
+
+  // Suppress unused prop lint if onRewardWon is kept in interface for compatibility
+  void onRewardWon;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-4 select-none animate-fadeIn">
-      <div 
+      <div
         className="bg-gradient-to-b from-[#131a29] via-[#0c111c] to-[#070a12] border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-[0_0_50px_rgba(16,185,129,0.2)] text-white relative max-h-[92vh] overflow-y-auto overscroll-contain scroll-smooth"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
@@ -100,16 +183,209 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
           </div>
           <div>
             <h2 className="text-base sm:text-lg font-black tracking-tight text-white">
-              সাপ্তাহিক ও লাকি বোনাস হাব
+              বোনাস ও রিওয়ার্ড হাব
             </h2>
             <p className="text-[11px] text-slate-400">
-              ৭ দিনের স্ট্রিক বোনাস (৫০০৳) ও দৈনিক লাকি স্পিনার
+              ইনভাইট বোনাস ১০০%, ৭ দিনের স্ট্রিক (৫০০৳) ও লাকি স্পিনার
             </p>
           </div>
         </div>
 
         <div className="mt-4 space-y-4">
-          {/* ================= CARD 1: 7-DAY STREAK (500 BDT) ================= */}
+          {/* ================= CARD 1: INVITE BONUS 100% ================= */}
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-[#0d1f2d] via-[#0d1827] to-[#0a101d] border border-cyan-400/50 shadow-lg relative overflow-hidden">
+            <div className="absolute -top-6 -right-6 w-32 h-32 bg-cyan-500/15 rounded-full blur-2xl pointer-events-none" />
+
+            <div className="flex items-start justify-between gap-2 mb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 flex items-center justify-center shrink-0">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">১. ইনভাইট বোনাস ১০০%</h3>
+                  <span className="text-[11px] text-cyan-300 font-semibold">
+                    বন্ধুর ১ম ডিপোজিটের সমপরিমাণ ১০০% বোনাস!
+                  </span>
+                </div>
+              </div>
+              <div className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-cyan-500/30 to-emerald-500/30 border border-cyan-400/60 text-cyan-200 font-mono font-black text-xs shrink-0">
+                ১০০%
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-200 leading-relaxed mb-2.5">
+              আপনার <strong className="text-cyan-300">রেফারেল লিংক</strong> বা{' '}
+              <strong className="text-amber-300">রেফার কোড</strong> ব্যবহার করে কেউ নতুন একাউন্ট করে শুরুতে যত টাকা ডিপোজিট করবে, ঠিক তত টাকা (<strong className="text-emerald-400">১০০%</strong>) আপনার রেফার বোনাস হিসেবে যুক্ত হবে!
+            </p>
+
+            {/* Clear Example Box */}
+            <div className="bg-[#070d17] border border-cyan-500/25 rounded-xl p-2.5 mb-3 text-[11px] text-slate-300 flex items-center justify-between gap-2">
+              <span>যেমন: বন্ধু ১ম ডিপোজিট করলে</span>
+              <span className="font-mono font-black text-emerald-400 whitespace-nowrap">
+                ৳১,০০০ → বোনাস ৳১,০০০ (১০০%)
+              </span>
+            </div>
+
+            {currentUser ? (
+              <div className="space-y-2.5">
+                {/* Shareable Referral Link */}
+                <div className="bg-[#080d16] border border-[#1d2c42] rounded-xl p-2.5 space-y-2">
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span className="flex items-center gap-1 font-bold text-cyan-300">
+                      <Link2 className="w-3 h-3" />
+                      <span>আপনার রেফারেল লিংক (Invite Link):</span>
+                    </span>
+                  </div>
+                  <div className="bg-[#05080f] border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-cyan-200 truncate select-all">
+                    {referralLink}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyLink}
+                      className="py-2 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 active:scale-98 transition-all cursor-pointer shadow-md shadow-cyan-900/30"
+                    >
+                      {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedLink ? 'লিংক কপি হয়েছে!' : 'লিংক কপি করুন'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleShareLink}
+                      className="py-2 px-3 rounded-xl bg-[#152236] hover:bg-[#1d2e48] border border-cyan-500/40 text-cyan-200 font-bold text-xs flex items-center justify-center gap-1.5 active:scale-98 transition-all cursor-pointer"
+                    >
+                      <Share2 className="w-3.5 h-3.5" />
+                      <span>শেয়ার করুন</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Referral Code Box */}
+                <div className="bg-[#080d16] border border-[#1d2c42] rounded-xl p-2.5 flex items-center justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">আপনার রেফার কোড (Referral Code):</span>
+                    <span className="font-mono font-black text-amber-300 text-sm tracking-wider select-all">
+                      {userRefCode}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyCode}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedCode ? 'কপি হয়েছে' : 'কোড কপি'}</span>
+                  </button>
+                </div>
+
+                {/* 3-Column Referral Stats */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-[#070b13] border border-white/10 rounded-xl p-2 text-center">
+                    <span className="text-[9.5px] text-slate-400 block">মোট ইনভাইট</span>
+                    <span className="font-mono font-black text-sm text-white">{totalInvited} জন</span>
+                  </div>
+                  <div className="bg-[#070b13] border border-white/10 rounded-xl p-2 text-center">
+                    <span className="text-[9.5px] text-slate-400 block">১ম ডিপোজিট</span>
+                    <span className="font-mono font-black text-sm text-emerald-400">{rewardedFriends.length} জন</span>
+                  </div>
+                  <div className="bg-[#070b13] border border-cyan-500/30 rounded-xl p-2 text-center">
+                    <span className="text-[9.5px] text-slate-400 block">মোট বোনাস</span>
+                    <span className="font-mono font-black text-sm text-cyan-300">
+                      ৳{totalInviteBonusEarned.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Active Locked Invite Bonus Indicator */}
+                {activeInviteBonusBalance > 0 && (
+                  <div className="bg-amber-500/10 border border-amber-500/35 rounded-xl px-3 py-2 flex items-center justify-between text-[11px]">
+                    <span className="text-amber-200 flex items-center gap-1.5 font-semibold">
+                      <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>সক্রিয় ইনভাইট বোনাস ব্যালেন্স:</span>
+                    </span>
+                    <span className="font-mono font-black text-amber-300">
+                      ৳ {activeInviteBonusBalance.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+
+                {/* Invited Friends Toggle & List */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundManager.playClick();
+                    setShowFriendsList((prev) => !prev);
+                  }}
+                  className="w-full py-1.5 px-3 rounded-xl bg-[#0d1626] hover:bg-[#132036] border border-[#1f304a] text-[11px] font-bold text-slate-300 flex items-center justify-between cursor-pointer transition-colors"
+                >
+                  <span>আপনার ইনভাইট তালিকা দেখুন ({referrals.length} জন)</span>
+                  <span className="text-cyan-400">{showFriendsList ? 'লুকান ▲' : 'দেখুন ▼'}</span>
+                </button>
+
+                {showFriendsList && (
+                  <div className="bg-[#060a12] border border-[#1b283f] rounded-xl p-2.5 max-h-40 overflow-y-auto space-y-1.5">
+                    {referrals.length === 0 ? (
+                      <p className="text-[11px] text-slate-500 text-center py-3">
+                        এখনও কেউ আপনার রেফার লিংক বা কোড দিয়ে একাউন্ট করেনি।
+                      </p>
+                    ) : (
+                      referrals.map((r) => {
+                        const isRewarded = r.status === 'rewarded' || (r.bonusAmount || 0) > 0;
+                        return (
+                          <div
+                            key={r.id}
+                            className="p-2 rounded-lg bg-[#0c1322] border border-white/5 flex items-center justify-between gap-2 text-[11px]"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-bold text-white truncate">
+                                {r.referredName || r.referredUserCode}
+                              </div>
+                              <div className="text-[10px] font-mono text-slate-400">
+                                {r.referredUserCode}
+                                {r.firstDepositAmount ? ` · ডিপোজিট ৳${r.firstDepositAmount.toLocaleString()}` : ''}
+                              </div>
+                            </div>
+                            {isRewarded ? (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono font-bold text-[10px] shrink-0">
+                                +৳{r.bonusAmount.toLocaleString()} (১০০%)
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold text-[10px] flex items-center gap-1 shrink-0">
+                                <Clock className="w-2.5 h-2.5" />
+                                <span>১ম ডিপোজিট বাকি</span>
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  soundManager.playClick();
+                  onClose();
+                  onOpenAuth?.('আপনার রেফারেল লিংক ও কোড পেতে প্রথমে একাউন্ট লগইন বা সাইনআপ করুন!');
+                }}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg cursor-pointer active:scale-98 transition-all"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>রেফারেল লিংক পেতে লগইন / সাইনআপ করুন</span>
+              </button>
+            )}
+
+            {/* Mandatory Terms Notice (বি:দ্র:) */}
+            <div className="mt-3 p-2.5 rounded-xl bg-rose-950/35 border border-rose-500/35 flex items-start gap-2 text-[10.5px] text-rose-200/95 leading-snug">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                <strong className="text-rose-300">বি:দ্র:</strong> এই ইনভাইট বোনাসের টাকা সরাসরি উত্তোলন (উইথড্র) করা যাবে না এবং এই বোনাস টাকা দিয়ে গেম খেলে কখনই লাভবান হওয়া যাবে না।
+              </span>
+            </div>
+          </div>
+
+          {/* ================= CARD 2: 7-DAY STREAK (500 BDT) ================= */}
           <div className="p-4 rounded-2xl bg-gradient-to-br from-[#1a1426] to-[#0e0b17] border border-amber-500/40 shadow-lg relative overflow-hidden">
             <div className="absolute top-0 right-0 w-28 h-28 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
 
@@ -215,7 +491,7 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
                   <Sparkles className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-white">২. দৈনিক লাকি স্পিনার</h3>
+                  <h3 className="text-sm font-black text-white">৩. দৈনিক লাকি স্পিনার</h3>
                   <span className="text-[11px] text-rose-300">২০৳ থেকে ৫০০৳ ও iPhone 17 Pro Max</span>
                 </div>
               </div>

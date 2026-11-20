@@ -49,8 +49,13 @@ export const PWAInstallModal: React.FC<PWAInstallModalProps> = ({
         </button>
 
         {/* App Logo */}
-        <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-400 via-red-600 to-amber-600 p-0.5 shadow-xl shadow-amber-500/20 mb-3 relative flex items-center justify-center border-2 border-amber-500/60">
-          <img src="/skywin-logo.svg" alt="SkyWin BD App Logo" className="w-full h-full object-cover rounded-[22px]" referrerPolicy="no-referrer" />
+        <div className="w-24 h-24 rounded-3xl bg-[#000B2C] p-1 shadow-xl shadow-cyan-500/20 mb-3 relative flex items-center justify-center">
+          <img
+            src="/assets/aistudio/SkyWinBD_Airborne_Logo_0dd77831.webp"
+            alt="SkyWin BD App Logo"
+            className="w-full h-full object-contain rounded-[20px]"
+            referrerPolicy="no-referrer"
+          />
           <span className="absolute -bottom-1 -right-1 px-1.5 py-0.5 rounded-full bg-amber-400 text-black font-black text-[9px] shadow">
             APP
           </span>

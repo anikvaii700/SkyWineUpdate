@@ -83,20 +83,24 @@ export function recordUserBet(bet: {
   }
 }
 
-// Helper: Calculate total locked bonus & commission funds (welcome, first deposit bonus %, referral commission, reward bonus)
+// Helper: Calculate total locked bonus & commission funds (welcome, first deposit bonus %, 100% invite bonus, reward bonus)
 export function calculateTotalLockedBonuses(acc: {
   initialBonus?: number;
   referralBonusEarned?: number;
+  inviteBonusBalance?: number;
   firstDepositBonusEarned?: number;
   rewardBonusEarned?: number;
   lockedPrincipal?: number;
 }): number {
   const welcome = acc.initialBonus !== undefined ? acc.initialBonus : 100;
-  const ref = acc.referralBonusEarned || 0;
+  const activeInviteBonus =
+    acc.inviteBonusBalance !== undefined
+      ? Math.max(0, acc.inviteBonusBalance)
+      : (acc.referralBonusEarned || 0);
   const firstDep = acc.firstDepositBonusEarned || 0;
   const rewards = acc.rewardBonusEarned || 0;
   const explicitLocked = acc.lockedPrincipal || 0;
-  return Math.max(welcome + ref + firstDep + rewards, explicitLocked);
+  return Math.max(welcome + activeInviteBonus + firstDep + rewards, explicitLocked);
 }
 
 // Helper: Calculate withdrawable balance (শুধুমাত্র উইন হওয়া যে টাকা সেটা উইথড্র দিতে পারবে, বোনাস ও কমিশন কখনই নয়)
@@ -270,7 +274,10 @@ export function getUserFullHistory(identifier: string): UserFullHistoryData | nu
       referralCode: targetAccount.referralCode || targetAccount.userCode,
       referredBy: targetAccount.referredBy,
       referralCount: targetAccount.referralCount || userReferrals.length,
-      referralBonusEarned: targetAccount.referralBonusEarned || userReferrals.length * 50,
+      referralBonusEarned:
+        targetAccount.referralBonusEarned !== undefined
+          ? targetAccount.referralBonusEarned
+          : userReferrals.reduce((sum, r) => sum + (r.bonusAmount || 0), 0),
       status: targetAccount.status || 'active',
       suspendedUntil: targetAccount.suspendedUntil || null,
       deactivationReason: targetAccount.deactivationReason || null,
@@ -307,6 +314,7 @@ export function getAllAccountsWithStats(): Array<{
   referralCode: string;
   referralCount: number;
   referralBonusEarned: number;
+  inviteBonusBalance: number;
   status?: 'active' | 'suspended' | 'banned';
   suspendedUntil?: string | null;
   deactivationReason?: string | null;
@@ -324,6 +332,12 @@ export function getAllAccountsWithStats(): Array<{
     const lockedBonus = calculateTotalLockedBonuses(acc);
     const hasDep = Boolean(acc.hasDeposited || (acc.totalDeposited && acc.totalDeposited > 0));
     const withdrawable = calculateWithdrawableBalance(acc.balance, lockedBonus, hasDep, acc.totalDeposited);
+    const computedReferralBonus =
+      acc.referralBonusEarned !== undefined
+        ? acc.referralBonusEarned
+        : referrals
+            .filter((r) => r.referrerCode.toUpperCase() === acc.userCode?.toUpperCase())
+            .reduce((sum, r) => sum + (r.bonusAmount || 0), 0);
 
     return {
       uid: acc.uid,
@@ -338,7 +352,9 @@ export function getAllAccountsWithStats(): Array<{
       hasDeposited: hasDep,
       referralCode: acc.referralCode || acc.userCode,
       referralCount: inviteCount,
-      referralBonusEarned: acc.referralBonusEarned || inviteCount * 50,
+      referralBonusEarned: computedReferralBonus,
+      inviteBonusBalance:
+        acc.inviteBonusBalance !== undefined ? acc.inviteBonusBalance : computedReferralBonus,
       status: acc.status || 'active',
       suspendedUntil: acc.suspendedUntil || null,
       deactivationReason: acc.deactivationReason || null,
@@ -380,8 +396,14 @@ export async function syncUsersFromFirestore(): Promise<ReturnType<typeof getAll
         hasDeposited: Boolean(data.hasDeposited || (data.totalDeposited && data.totalDeposited > 0)),
         referralCode: data.referralCode || data.userCode || `USER-${key.slice(-5)}`,
         referredBy: data.referredBy || undefined,
+        referredByUid: data.referredByUid || undefined,
         referralCount: typeof data.referralCount === 'number' ? data.referralCount : 0,
         referralBonusEarned: typeof data.referralBonusEarned === 'number' ? data.referralBonusEarned : 0,
+        inviteBonusBalance:
+          typeof data.inviteBonusBalance === 'number'
+            ? data.inviteBonusBalance
+            : (typeof data.referralBonusEarned === 'number' ? data.referralBonusEarned : 0),
+        firstDepositReferralRewarded: Boolean(data.firstDepositReferralRewarded),
         status: data.status || 'active',
         suspendedUntil: data.suspendedUntil || null,
         deactivationReason: data.deactivationReason || null,

@@ -45,6 +45,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Referral records and 100% first-deposit invite bonus tracking
+    match /referrals/{referralId} {
+      allow read, write: if true;
+    }
+
     // User profile & Server Wallet document
     match /users/{userId} {
       allow read, write: if true;

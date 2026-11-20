@@ -104,9 +104,9 @@ export const MobileSideDrawer: React.FC<MobileSideDrawerProps> = ({
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <img 
-                src="/skywin-logo.svg" 
+                src="/assets/aistudio/SkyWinBD_Airborne_Logo_0dd77831.webp" 
                 alt="SkyWin BD" 
-                className="w-9 h-9 rounded-xl object-contain drop-shadow-[0_2px_8px_rgba(255,183,3,0.5)] border border-amber-500/40 shrink-0"
+                className="w-10 h-10 rounded-xl bg-[#000B2C] object-contain drop-shadow-[0_2px_10px_rgba(56,189,248,0.4)] shrink-0"
                 referrerPolicy="no-referrer"
               />
               <div className="flex items-center gap-1.5">

@@ -12,10 +12,37 @@
         "phoneNumber": { "type": "string" },
         "balance": { "type": "number" },
         "userCode": { "type": "string" },
+        "referralCode": { "type": "string" },
+        "referredBy": { "type": "string" },
+        "referredByUid": { "type": "string" },
+        "referralCount": { "type": "number" },
+        "referralBonusEarned": { "type": "number" },
+        "inviteBonusBalance": { "type": "number" },
+        "firstDepositReferralRewarded": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "balance"]
+    },
+    "ReferralRecord": {
+      "title": "ReferralRecord",
+      "description": "Tracks invited friends and 100% first-deposit invite bonus rewards",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "referrerUid": { "type": "string" },
+        "referrerCode": { "type": "string" },
+        "referredUid": { "type": "string" },
+        "referredUserCode": { "type": "string" },
+        "referredPhone": { "type": "string" },
+        "referredName": { "type": "string" },
+        "firstDepositAmount": { "type": "number" },
+        "bonusAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending_deposit", "rewarded"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "rewardedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "referrerCode", "referredUserCode", "bonusAmount", "status"]
     },
     "DepositRequest": {
       "title": "DepositRequest",
@@ -101,6 +128,10 @@
     "/users/{userId}/bets/{betId}": {
       "schema": "BetRecord",
       "description": "Subcollection of player bet history and game results"
+    },
+    "/referrals/{referralId}": {
+      "schema": "ReferralRecord",
+      "description": "Global referral linkages and 100% first-deposit invite bonus tracking"
     },
     "/deposit_requests/{requestId}": {
       "schema": "DepositRequest",

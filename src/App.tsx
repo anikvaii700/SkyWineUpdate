@@ -47,6 +47,7 @@ import {
   listenToWithdrawalRequests,
 } from './services/manualPayment';
 import { soundManager } from './services/audio';
+import { backendApi, mapBackendMeToProfile } from './services/backendApi';
 import { Language, translations } from './utils/i18n';
 import {
   auth,
@@ -466,33 +467,38 @@ export default function App() {
         .catch(() => {});
     }
 
-    // 2. Listen to Firebase Google Auth state
+    // Firebase Auth is the only login session source. Wallet/profile come from PostgreSQL.
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         try {
-          const profile = await getOrCreateUserProfile(user, 0);
+          const me = await backendApi.getMe();
+          const profile = mapBackendMeToProfile(me, user);
+          const isPhoneAlias = /^user_01[0-9]{9}@phone\\.aviator\\.bd$/i.test(user.email || '');
           const appUser: AppUser = {
             uid: user.uid,
-            displayName: user.displayName || 'Google Player',
+            userCode: me.user.userCode,
+            referralCode: me.user.referralCode,
+            displayName: me.user.displayName || user.displayName || 'Player',
             email: user.email,
-            phoneNumber: profile.phoneNumber || user.phoneNumber || null,
+            phoneNumber: me.user.phoneNumber || user.phoneNumber || null,
             photoURL: user.photoURL,
-            provider: 'google',
+            provider: isPhoneAlias ? 'phone' : 'google',
+            status: me.user.status as AppUser['status'],
           };
           setCurrentUser(appUser);
           setUserProfile(profile);
-          setBalance(profile.balance);
+          setBalance(me.wallet.balance);
         } catch (err) {
-          console.error('Error fetching Firestore user profile:', err);
-        }
-      } else {
-        // If no firebase user, verify if there's a phone session
-        const currentPhoneSession = getActivePhoneSession();
-        if (!currentPhoneSession) {
+          console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
           setUserProfile(null);
           setBalance(0);
+          setAuthNoticeMessage('সার্ভারের সাথে সংযোগ হয়নি। কিছুক্ষণ পর আবার লগইন করুন।');
         }
+      } else {
+        setCurrentUser(null);
+        setUserProfile(null);
+        setBalance(0);
       }
     });
 
@@ -852,41 +858,14 @@ export default function App() {
 
   // Sync balance updates with Firestore cloud wallet or Phone Account storage
   const updateBalanceAndSync = useCallback((updater: (prev: number) => number) => {
+    // Game-round balance remains a local practice display until bet/cashout endpoints exist.
+    // It never writes or mutates the authoritative PostgreSQL wallet.
     setBalance((prev) => {
       const next = Math.max(0, Math.round(updater(prev) * 100) / 100);
-      if (currentUser) {
-        if (currentUser.provider === 'google') {
-          syncUserBalanceToFirestore(currentUser.uid, next);
-        } else {
-          syncPhoneAccountBalance(currentUser.uid, next);
-        }
-        setUserProfile((p) => (p ? { ...p, balance: next } : null));
-      }
+      setUserProfile((profile) => (profile ? { ...profile, balance: next } : null));
       return next;
     });
-  }, [currentUser]);
-
-  // Adjust locked 100% Invite Bonus balance & sync to localStorage + Firestore
-  const adjustInviteBonusBalance = useCallback((delta: number, lockedDelta: number = 0) => {
-    if (!delta && !lockedDelta) return;
-    const nextInvite = Math.max(0, Math.round((inviteBonusBalanceRef.current + delta) * 100) / 100);
-    inviteBonusBalanceRef.current = nextInvite;
-    setUserProfile((p) => {
-      if (!p) return null;
-      const nextLocked =
-        lockedDelta !== 0
-          ? Math.max(0, Math.round(((p.lockedPrincipal || 0) + lockedDelta) * 100) / 100)
-          : p.lockedPrincipal;
-      return {
-        ...p,
-        inviteBonusBalance: nextInvite,
-        ...(lockedDelta !== 0 ? { lockedPrincipal: nextLocked } : {}),
-      };
-    });
-    if (currentUser) {
-      syncInviteBonusBalance(currentUser.uid, nextInvite, lockedDelta);
-    }
-  }, [currentUser]);
+  }, []);
 
   // Handle bonus rewards from Lucky Spinner, Daily Open Bonus & 7-Day Streak
   const handleRewardWon = useCallback((amount: number, reason: string) => {

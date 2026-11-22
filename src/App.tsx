@@ -39,31 +39,16 @@ import {
 } from './services/bonusService';
 import confetti from 'canvas-confetti';
 import {
-  getStoredDepositRequests,
-  getStoredWithdrawalRequests,
   getStoredPaymentSettings,
   SystemPaymentSettings,
-  listenToDepositRequests,
-  listenToWithdrawalRequests,
 } from './services/manualPayment';
 import { soundManager } from './services/audio';
+import { backendApi, mapBackendMeToProfile } from './services/backendApi';
 import { Language, translations } from './utils/i18n';
-import {
-  auth,
-  db,
-  getOrCreateUserProfile,
-  syncUserBalanceToFirestore,
-  recordWalletTransaction,
-  recordBetHistory,
-  UserWalletProfile,
-} from './services/firebase';
-import { doc, onSnapshot, getDoc } from 'firebase/firestore';
+import { auth, UserWalletProfile } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   AppUser,
-  getActivePhoneSession,
-  syncPhoneAccountBalance,
-  updatePhoneAccountBalanceLocally,
   checkAccountSuspensionStatus,
   logoutPhoneSession,
 } from './services/phoneAuth';
@@ -71,7 +56,6 @@ import { recordUserBet } from './services/userManagement';
 import {
   captureReferralCodeFromUrl,
   computeInviteBonusStake,
-  syncInviteBonusBalance,
 } from './services/referralService';
 import {
   AppControlConfig,
@@ -269,8 +253,7 @@ export default function App() {
       !showSplash &&
       capturedUrlReferralRef.current &&
       !hasAutoPromptedReferralAuthRef.current &&
-      !currentUser &&
-      !getActivePhoneSession()
+      !currentUser
     ) {
       hasAutoPromptedReferralAuthRef.current = true;
       hasAutoPromptedSpinnerRef.current = true;
@@ -440,59 +423,38 @@ export default function App() {
 
   // Listen to Firebase Auth or restore saved Phone session
   useEffect(() => {
-    // 1. Check if phone user session exists
-    const phoneSession = getActivePhoneSession();
-    if (phoneSession) {
-      setCurrentUser(phoneSession.user);
-      setUserProfile(phoneSession.profile);
-      setBalance(phoneSession.profile.balance);
-
-      // Immediately fetch from Firestore in background in case deposits were approved while app was closed
-      const cleanPhone = phoneSession.user.phoneNumber ? phoneSession.user.phoneNumber.replace(/[^0-9]/g, '') : '';
-      const uid = phoneSession.user.uid || `phone_${cleanPhone}`;
-      getDoc(doc(db, 'users', uid))
-        .then((snap) => {
-          if (snap.exists()) {
-            const d = snap.data();
-            if (d && typeof d.balance === 'number') {
-              const remoteBal = Math.max(0, Math.round(d.balance * 100) / 100);
-              setBalance(remoteBal);
-              setUserProfile((prev) => (prev ? { ...prev, ...d, balance: remoteBal } : (d as UserWalletProfile)));
-              updatePhoneAccountBalanceLocally(uid, remoteBal);
-              if (cleanPhone) updatePhoneAccountBalanceLocally(cleanPhone, remoteBal);
-            }
-          }
-        })
-        .catch(() => {});
-    }
-
-    // 2. Listen to Firebase Google Auth state
+    // Firebase Auth is the only login session source. Wallet/profile come from PostgreSQL.
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         try {
-          const profile = await getOrCreateUserProfile(user, 0);
+          const me = await backendApi.getMe();
+          const profile = mapBackendMeToProfile(me, user);
+          const isPhoneAlias = /^user_01[0-9]{9}@phone\.aviator\.bd$/i.test(user.email || '');
           const appUser: AppUser = {
             uid: user.uid,
-            displayName: user.displayName || 'Google Player',
+            userCode: me.user.userCode,
+            referralCode: me.user.referralCode,
+            displayName: me.user.displayName || user.displayName || 'Player',
             email: user.email,
-            phoneNumber: profile.phoneNumber || user.phoneNumber || null,
+            phoneNumber: me.user.phoneNumber || user.phoneNumber || null,
             photoURL: user.photoURL,
-            provider: 'google',
+            provider: isPhoneAlias ? 'phone' : 'google',
+            status: me.user.status as AppUser['status'],
           };
           setCurrentUser(appUser);
           setUserProfile(profile);
-          setBalance(profile.balance);
+          setBalance(INITIAL_BALANCE);
         } catch (err) {
-          console.error('Error fetching Firestore user profile:', err);
-        }
-      } else {
-        // If no firebase user, verify if there's a phone session
-        const currentPhoneSession = getActivePhoneSession();
-        if (!currentPhoneSession) {
+          console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
           setUserProfile(null);
           setBalance(0);
+          setAuthNoticeMessage('সার্ভারের সাথে সংযোগ হয়নি। কিছুক্ষণ পর আবার লগইন করুন।');
         }
+      } else {
+        setCurrentUser(null);
+        setUserProfile(null);
+        setBalance(0);
       }
     });
 
@@ -551,11 +513,12 @@ export default function App() {
         setPendingDepositCount(0);
         return;
       }
-      const depReqs = getStoredDepositRequests();
-      const wthReqs = getStoredWithdrawalRequests();
-      const pendingDep = depReqs.filter((r) => r.status === 'pending').length;
-      const pendingWth = wthReqs.filter((r) => r.status === 'pending').length;
-      setPendingDepositCount(pendingDep + pendingWth);
+      void backendApi.admin.getOverview()
+        .then((result) => {
+          const overview = (result as { overview?: { pendingDeposits?: number; pendingWithdrawals?: number } }).overview;
+          setPendingDepositCount(Number(overview?.pendingDeposits || 0) + Number(overview?.pendingWithdrawals || 0));
+        })
+        .catch(() => setPendingDepositCount(0));
     };
 
     const handleInviteBonusCredited = (e: Event) => {
@@ -614,293 +577,154 @@ export default function App() {
     };
   }, [currentUser]);
 
-  // Real-time Firestore listener for logged-in user wallet profile and balance
-  const prevRemoteBalanceRef = useRef<number | null>(null);
-  const prevRemoteInviteBonusRef = useRef<number | null>(null);
+  // Load public payment/support settings through the server API, never Firestore.
   useEffect(() => {
-    if (!currentUser) {
-      prevRemoteBalanceRef.current = null;
-      prevRemoteInviteBonusRef.current = null;
-      return;
-    }
+    let cancelled = false;
+    const refreshPublicSettings = async () => {
+      try {
+        const result = await backendApi.getPublicConfig();
+        if (cancelled) return;
+        const config = result.paymentSettings as Partial<SystemPaymentSettings>;
+        setSystemSettings((previous) => ({ ...previous, ...config }));
+      } catch (err) {
+        console.warn('Public payment settings could not be loaded:', err);
+      }
+    };
+    void refreshPublicSettings();
+    const handleSettingsUpdated = () => void refreshPublicSettings();
+    window.addEventListener('payment_settings_updated', handleSettingsUpdated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('payment_settings_updated', handleSettingsUpdated);
+    };
+  }, []);
 
-    const cleanPhone = currentUser.phoneNumber ? currentUser.phoneNumber.replace(/[^0-9]/g, '') : '';
-    const docId = currentUser.uid || (cleanPhone ? `phone_${cleanPhone}` : '');
-    if (!docId) return;
+  // Poll the PostgreSQL ledger for approval/rejection notifications.
+  // The server wallet is intentionally kept separate from the local practice-game balance.
+  useEffect(() => {
+    if (!currentUser || !auth.currentUser) return;
 
-    const userDocRef = doc(db, 'users', docId);
-    const unsubscribe = onSnapshot(
-      userDocRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data() as UserWalletProfile;
-          const newInviteBal = Math.max(0, Math.round((data.inviteBonusBalance || 0) * 100) / 100);
-          const inviteIncreased =
-            prevRemoteInviteBonusRef.current !== null && newInviteBal > prevRemoteInviteBonusRef.current;
-          const inviteDelta = inviteIncreased
-            ? Math.round((newInviteBal - (prevRemoteInviteBonusRef.current || 0)) * 100) / 100
-            : 0;
+    let cancelled = false;
+    let running = false;
+    const depositStatuses = new Map<string, string>();
+    const withdrawalStatuses = new Map<string, string>();
+    let initialLoad = true;
 
-          if (inviteIncreased && inviteDelta > 0) {
+    const refreshServerLedger = async () => {
+      if (running || !auth.currentUser) return;
+      running = true;
+      try {
+        const [depositResult, withdrawalResult, me] = await Promise.all([
+          backendApi.listMyDeposits(100, 0),
+          backendApi.listMyWithdrawals(100, 0),
+          backendApi.getMe(),
+        ]);
+        if (cancelled) return;
+
+        const deposits = (depositResult as { deposits?: Array<Record<string, any>> }).deposits || [];
+        const withdrawals = (withdrawalResult as { withdrawals?: Array<Record<string, any>> }).withdrawals || [];
+
+        for (const row of deposits) {
+          const id = String(row.id);
+          const status = String(row.status || '');
+          const previous = depositStatuses.get(id);
+          if (!initialLoad && previous === 'pending' && status === 'approved') {
+            soundManager.playWin();
             setUserAlertToast({
-              title: '🎁 ১০০% ইনভাইট বোনাস যুক্ত হয়েছে!',
-              message: `আপনার ইনভাইট করা বন্ধু প্রথম ডিপোজিট করায় ৳${inviteDelta.toLocaleString()} (১০০%) ইনভাইট বোনাস আপনার ব্যালেন্সে যোগ হয়েছে!`,
-              details: 'বি:দ্র: ইনভাইট বোনাসের টাকা উইথড্র করা যাবে না এবং এটি দিয়ে লাভবান হওয়া যাবে না।',
+              title: 'ডিপোজিট অনুমোদিত হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার ডিপোজিট অনুমোদিত হয়েছে।`,
+              details: 'সার্ভারের ওয়ালেট ব্যালেন্স আপডেট হয়েছে।',
               type: 'success',
             });
+          } else if (!initialLoad && previous === 'pending' && status === 'rejected') {
+            soundManager.playCrash();
+            setUserAlertToast({
+              title: 'ডিপোজিট রিকোয়েস্ট বাতিল হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার ডিপোজিট রিকোয়েস্ট বাতিল হয়েছে।`,
+              details: String(row.rejection_reason || 'অ্যাডমিন রিকোয়েস্টটি বাতিল করেছেন।'),
+              type: 'error',
+            });
+          }
+          depositStatuses.set(id, status);
+        }
+
+        for (const row of withdrawals) {
+          const id = String(row.id);
+          const status = String(row.status || '');
+          const previous = withdrawalStatuses.get(id);
+          if (!initialLoad && previous === 'pending' && status === 'completed') {
             soundManager.playWin();
+            setUserAlertToast({
+              title: 'উত্তোলন সম্পন্ন হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার উত্তোলন সম্পন্ন হয়েছে।`,
+              details: `পেমেন্ট নম্বর: ${String(row.personal_number || '')}`,
+              type: 'success',
+            });
+          } else if (!initialLoad && previous === 'pending' && status === 'rejected') {
+            soundManager.playCrash();
+            setUserAlertToast({
+              title: 'উত্তোলন বাতিল হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার উত্তোলন বাতিল হয়েছে।`,
+              details: String(row.rejection_reason || 'সার্ভারের ওয়ালেটে টাকা ফেরত যোগ হয়েছে।'),
+              type: 'warning',
+            });
           }
-
-          prevRemoteInviteBonusRef.current = newInviteBal;
-          inviteBonusBalanceRef.current = newInviteBal;
-
-          if (typeof data.balance === 'number') {
-            const newBal = Math.max(0, Math.round(data.balance * 100) / 100);
-
-            // If balance increased remotely (e.g. admin approved deposit or refunded withdrawal)
-            if (prevRemoteBalanceRef.current !== null && newBal > prevRemoteBalanceRef.current) {
-              const credited = Math.round((newBal - prevRemoteBalanceRef.current) * 100) / 100;
-              if (!inviteIncreased || Math.abs(credited - inviteDelta) > 0.01) {
-                setBalanceUpdateNotice(
-                  `🎉 আপনার একাউন্টে ৳ ${credited.toLocaleString()} জমা হয়েছে! বর্তমান ব্যালেন্স: ৳ ${newBal.toLocaleString()}`
-                );
-                soundManager.playWin();
-              }
-            }
-
-            prevRemoteBalanceRef.current = newBal;
-            setBalance(newBal);
-            setUserProfile((prev) => (prev ? { ...prev, ...data, balance: newBal, inviteBonusBalance: newInviteBal } : { ...data, balance: newBal, inviteBonusBalance: newInviteBal }));
-
-            if (currentUser.provider === 'phone') {
-              updatePhoneAccountBalanceLocally(currentUser.uid, newBal);
-              if (cleanPhone) {
-                updatePhoneAccountBalanceLocally(cleanPhone, newBal);
-              }
-            }
-          }
+          withdrawalStatuses.set(id, status);
         }
-      },
-      (error) => {
-        console.warn('Realtime user profile listener error:', error);
-      }
-    );
 
-    return () => unsubscribe();
-  }, [currentUser?.uid, currentUser?.phoneNumber]);
-
-  // Real-time Firestore listener for System Payment Settings (bKash/Nagad/Rocket numbers and notices)
-  useEffect(() => {
-    const settingsDocRef = doc(db, 'system', 'payment_settings');
-    const unsubscribe = onSnapshot(
-      settingsDocRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data) {
-            localStorage.setItem('aviator_payment_settings_v2', JSON.stringify(data));
-            setSystemSettings(data as SystemPaymentSettings);
-            window.dispatchEvent(new CustomEvent('payment_settings_updated', { detail: data }));
-          }
-        }
-      },
-      (err) => {
-        console.warn('Realtime payment settings listener error:', err);
-      }
-    );
-    return () => unsubscribe();
-  }, []);
-
-  // Real-time listener for local storage and in-app payment & telegram settings changes
-  useEffect(() => {
-    const handleSettingsUpdated = (e: Event) => {
-      const customEvent = e as CustomEvent<SystemPaymentSettings>;
-      if (customEvent.detail) {
-        setSystemSettings(customEvent.detail);
-      } else {
-        setSystemSettings(getStoredPaymentSettings());
+        // Refresh profile metadata only. Keep the simulated game balance local.
+        setUserProfile(mapBackendMeToProfile(me, auth.currentUser));
+        initialLoad = false;
+      } catch (err) {
+        if (!cancelled) console.warn('Server wallet refresh failed:', err);
+      } finally {
+        running = false;
       }
     };
-    window.addEventListener('payment_settings_updated', handleSettingsUpdated);
-    return () => window.removeEventListener('payment_settings_updated', handleSettingsUpdated);
-  }, []);
 
-  // Real-time listener for user deposit/withdrawal approvals and alerts
-  useEffect(() => {
-    if (!currentUser) return;
-
-    // Reset status tracker on user change
-    isUserRequestsInitialRef.current = true;
-    knownDepositStatusesRef.current = {};
-    knownWithdrawalStatusesRef.current = {};
-
-    const cleanMyPhone = currentUser.phoneNumber ? currentUser.phoneNumber.replace(/[^0-9]/g, '') : '';
-    const myUserCode = currentUser.userCode || '';
-
-    // 1. Listen to Deposit Request transitions for this user
-    const unsubDeposits = listenToDepositRequests((allRequests) => {
-      const myDeposits = allRequests.filter((r) => {
-        if (r.userId === currentUser.uid) return true;
-        if (cleanMyPhone && (r.senderNumber === cleanMyPhone || r.userIdentifier.includes(cleanMyPhone))) return true;
-        if (myUserCode && r.userCode === myUserCode) return true;
-        return false;
-      });
-
-      if (isUserRequestsInitialRef.current) {
-        myDeposits.forEach((r) => {
-          knownDepositStatusesRef.current[r.id] = r.status;
-        });
-        return;
-      }
-
-      myDeposits.forEach((r) => {
-        const prevStatus = knownDepositStatusesRef.current[r.id];
-        // Deposit Approved: User gets celebration alert & immediate balance reflection
-        if (prevStatus === 'pending' && r.status === 'approved') {
-          soundManager.playWin();
-          setUserAlertToast({
-            title: 'এড মানি সফলভাবে অনুমোদিত!',
-            message: `আপনার ৳ ${r.amount.toLocaleString()} টাকার ${r.method.toUpperCase()} ডিপোজিট অনুমোদিত হয়েছে!`,
-            details: `ট্রানজেকশন আইডি: ${r.trxId}। একাউন্টে ৳ ${r.amount.toLocaleString()} ব্যালেন্স সফলভাবে যোগ করা হয়েছে।`,
-            type: 'success',
-          });
-
-          // Immediate local balance credit so user sees funds without delay
-          setBalance((prev) => {
-            const next = Math.round((prev + r.amount) * 100) / 100;
-            if (currentUser.provider === 'phone') {
-              updatePhoneAccountBalanceLocally(currentUser.uid, next);
-              if (cleanMyPhone) updatePhoneAccountBalanceLocally(cleanMyPhone, next);
-            }
-            return next;
-          });
-          setUserProfile((p) => (p ? { ...p, balance: Math.round(((p.balance || 0) + r.amount) * 100) / 100 } : null));
-        }
-        // Deposit Rejected: User gets reason notification
-        else if (prevStatus === 'pending' && r.status === 'rejected') {
-          soundManager.playCrash();
-          setUserAlertToast({
-            title: 'এড মানি বাতিল করা হয়েছে',
-            message: `আপনার ৳ ${r.amount.toLocaleString()} টাকার ${r.method.toUpperCase()} ডিপোজিট রিকোয়েস্ট বাতিল হয়েছে।`,
-            details: `কারণ: ${r.rejectionReason || 'সঠিক তথ্য বা TrxID না পাওয়ায় বাতিল করা হয়েছে।'}`,
-            type: 'error',
-          });
-        }
-        knownDepositStatusesRef.current[r.id] = r.status;
-      });
-    });
-
-    // 2. Listen to Withdrawal Request transitions for this user
-    const unsubWithdrawals = listenToWithdrawalRequests((allWithdrawals) => {
-      const myWithdrawals = allWithdrawals.filter((w) => {
-        if (w.userId === currentUser.uid) return true;
-        if (cleanMyPhone && (w.personalNumber === cleanMyPhone || w.userIdentifier.includes(cleanMyPhone))) return true;
-        if (myUserCode && w.userCode === myUserCode) return true;
-        return false;
-      });
-
-      if (isUserRequestsInitialRef.current) {
-        myWithdrawals.forEach((w) => {
-          knownWithdrawalStatusesRef.current[w.id] = w.status;
-        });
-        isUserRequestsInitialRef.current = false;
-        return;
-      }
-
-      myWithdrawals.forEach((w) => {
-        const prevStatus = knownWithdrawalStatusesRef.current[w.id];
-        // Withdrawal Completed: User gets payout alert
-        if (prevStatus === 'pending' && w.status === 'completed') {
-          soundManager.playWin();
-          setUserAlertToast({
-            title: 'ক্যাশআউট সফল হয়েছে!',
-            message: `আপনার ৳ ${w.amount.toLocaleString()} টাকার ${w.method.toUpperCase()} উত্তোলন সফলভাবে সম্পন্ন হয়েছে!`,
-            details: `টাকা আপনার পার্সোনাল নম্বর (+88 ${w.personalNumber})-এ পাঠিয়ে দেওয়া হয়েছে।`,
-            type: 'success',
-          });
-        }
-        // Withdrawal Rejected: User gets refund alert & balance restored
-        else if (prevStatus === 'pending' && w.status === 'rejected') {
-          soundManager.playCrash();
-          setUserAlertToast({
-            title: 'ক্যাশআউট বাতিল ও রিফান্ড',
-            message: `আপনার ৳ ${w.amount.toLocaleString()} টাকার উত্তোলন বাতিল হয়েছে এবং টাকা ব্যালেন্সে ফেরত দেওয়া হয়েছে।`,
-            details: `কারণ: ${w.rejectionReason || 'ভুল নম্বর বা তথ্যগত ত্রুটির কারণে রিফান্ড করা হয়েছে।'}`,
-            type: 'warning',
-          });
-
-          // Immediate local refund
-          setBalance((prev) => {
-            const next = Math.round((prev + w.amount) * 100) / 100;
-            if (currentUser.provider === 'phone') {
-              updatePhoneAccountBalanceLocally(currentUser.uid, next);
-              if (cleanMyPhone) updatePhoneAccountBalanceLocally(cleanMyPhone, next);
-            }
-            return next;
-          });
-          setUserProfile((p) => (p ? { ...p, balance: Math.round(((p.balance || 0) + w.amount) * 100) / 100 } : null));
-        }
-        knownWithdrawalStatusesRef.current[w.id] = w.status;
-      });
-    });
+    void refreshServerLedger();
+    const timer = window.setInterval(() => void refreshServerLedger(), 30000);
+    window.addEventListener('focus', refreshServerLedger);
 
     return () => {
-      unsubDeposits();
-      unsubWithdrawals();
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshServerLedger);
     };
-  }, [currentUser?.uid, currentUser?.phoneNumber]);
+  }, [currentUser?.uid]);
 
   // Sync balance updates with Firestore cloud wallet or Phone Account storage
   const updateBalanceAndSync = useCallback((updater: (prev: number) => number) => {
+    // Game-round balance remains a local practice display until bet/cashout endpoints exist.
+    // It never writes or mutates the authoritative PostgreSQL wallet.
     setBalance((prev) => {
       const next = Math.max(0, Math.round(updater(prev) * 100) / 100);
-      if (currentUser) {
-        if (currentUser.provider === 'google') {
-          syncUserBalanceToFirestore(currentUser.uid, next);
-        } else {
-          syncPhoneAccountBalance(currentUser.uid, next);
-        }
-        setUserProfile((p) => (p ? { ...p, balance: next } : null));
-      }
+      setUserProfile((profile) => (profile ? { ...profile, balance: next } : null));
       return next;
     });
-  }, [currentUser]);
+  }, []);
 
-  // Adjust locked 100% Invite Bonus balance & sync to localStorage + Firestore
   const adjustInviteBonusBalance = useCallback((delta: number, lockedDelta: number = 0) => {
     if (!delta && !lockedDelta) return;
     const nextInvite = Math.max(0, Math.round((inviteBonusBalanceRef.current + delta) * 100) / 100);
     inviteBonusBalanceRef.current = nextInvite;
-    setUserProfile((p) => {
-      if (!p) return null;
-      const nextLocked =
-        lockedDelta !== 0
-          ? Math.max(0, Math.round(((p.lockedPrincipal || 0) + lockedDelta) * 100) / 100)
-          : p.lockedPrincipal;
+    setUserProfile((profile) => {
+      if (!profile) return null;
+      const nextLocked = lockedDelta !== 0
+        ? Math.max(0, Math.round(((profile.lockedPrincipal || 0) + lockedDelta) * 100) / 100)
+        : profile.lockedPrincipal;
       return {
-        ...p,
+        ...profile,
         inviteBonusBalance: nextInvite,
         ...(lockedDelta !== 0 ? { lockedPrincipal: nextLocked } : {}),
       };
     });
-    if (currentUser) {
-      syncInviteBonusBalance(currentUser.uid, nextInvite, lockedDelta);
-    }
-  }, [currentUser]);
+    // Practice bonuses stay local; only server-approved ledger transactions may change real wallet funds.
+  }, []);
 
   // Handle bonus rewards from Lucky Spinner, Daily Open Bonus & 7-Day Streak
   const handleRewardWon = useCallback((amount: number, reason: string) => {
     updateBalanceAndSync((prev) => prev + amount);
-    if (currentUser && currentUser.provider === 'google') {
-      recordWalletTransaction(currentUser.uid, {
-        type: 'deposit',
-        amount,
-        method: 'bkash',
-        accountNumber: 'SYSTEM_BONUS',
-        status: 'completed',
-        trxId: 'BNS' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      });
-    }
     setUserAlertToast({
       title: 'বোনাস ব্যালেন্সে যোগ হয়েছে!',
       message: `৳${amount} টাকা (${reason}) সফলভাবে আপনার একাউন্টে যোগ হয়েছে!`,
@@ -1302,9 +1126,6 @@ export default function App() {
       outcome: 'won',
     });
 
-    if (currentUser && currentUser.provider === 'google') {
-      recordBetHistory(currentUser.uid, 'aviator', currentBet.amount, mult, actualWin, 'won');
-    }
     setWinNotification({ amount: actualWin, multiplier: mult });
 
     setMyBetHistory((prev) => [
@@ -1372,9 +1193,6 @@ export default function App() {
       outcome: 'won',
     });
 
-    if (currentUser && currentUser.provider === 'google') {
-      recordBetHistory(currentUser.uid, 'aviator', currentBet.amount, mult, actualWin, 'won');
-    }
     setWinNotification({ amount: actualWin, multiplier: mult });
 
     setMyBetHistory((prev) => [
@@ -2169,29 +1987,9 @@ export default function App() {
         initialTab={walletTab}
         onAddFunds={(amt) => {
           updateBalanceAndSync((prev) => prev + amt);
-          if (currentUser && currentUser.provider === 'google') {
-            recordWalletTransaction(currentUser.uid, {
-              type: 'deposit',
-              amount: amt,
-              method: 'bkash',
-              accountNumber: userProfile?.phoneNumber || '01712-345678',
-              status: 'completed',
-              trxId: 'DEP' + Math.random().toString(36).substring(2, 9).toUpperCase(),
-            });
-          }
         }}
         onWithdrawFunds={(amt) => {
           updateBalanceAndSync((prev) => Math.max(0, Math.round((prev - amt) * 100) / 100));
-          if (currentUser && currentUser.provider === 'google') {
-            recordWalletTransaction(currentUser.uid, {
-              type: 'withdraw',
-              amount: amt,
-              method: 'bkash',
-              accountNumber: userProfile?.phoneNumber || '01712-345678',
-              status: 'completed',
-              trxId: 'WTH' + Math.random().toString(36).substring(2, 9).toUpperCase(),
-            });
-          }
         }}
         onResetBalance={() => {
           updateBalanceAndSync(() => INITIAL_BALANCE);
@@ -2222,7 +2020,7 @@ export default function App() {
         onLoginSuccess={(user, profile) => {
           setCurrentUser(user);
           setUserProfile(profile);
-          setBalance(profile.balance);
+          setBalance(INITIAL_BALANCE);
           setAuthNoticeMessage(null);
         }}
         onLogoutSuccess={() => {
@@ -2246,12 +2044,10 @@ export default function App() {
         onClose={() => setIsAdminOpen(false)}
         initialTab={adminPanelInitialTab}
         onBalanceAdjusted={() => {
-          // If phone session exists, refresh state
-          const currentPhoneSession = getActivePhoneSession();
-          if (currentPhoneSession && currentUser?.uid === currentPhoneSession.user.uid) {
-            setBalance(currentPhoneSession.profile.balance);
-            setUserProfile(currentPhoneSession.profile);
-          }
+          if (!auth.currentUser) return;
+          void backendApi.getMe()
+            .then((me) => setUserProfile(mapBackendMeToProfile(me, auth.currentUser)))
+            .catch((err) => console.warn('Wallet profile refresh failed:', err));
         }}
       />
 

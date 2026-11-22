@@ -2092,8 +2092,9 @@ export default function App() {
         onLoginSuccess={(user, profile) => {
           setCurrentUser(user);
           setUserProfile(profile);
-          setBalance(profile.balance || 0);
-          if (auth.currentUser) serverWalletBalanceRef.current = profile.balance || 0;
+          const serverBase = profile.balance || 0;
+          if (auth.currentUser) serverWalletBalanceRef.current = serverBase;
+          setBalance(Math.max(0, Math.round((serverBase + getLocalWalletAdjustment(user.uid)) * 100) / 100));
           setAuthNoticeMessage(null);
         }}
         onLogoutSuccess={() => {

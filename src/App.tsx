@@ -557,11 +557,12 @@ export default function App() {
         setPendingDepositCount(0);
         return;
       }
-      const depReqs = getStoredDepositRequests();
-      const wthReqs = getStoredWithdrawalRequests();
-      const pendingDep = depReqs.filter((r) => r.status === 'pending').length;
-      const pendingWth = wthReqs.filter((r) => r.status === 'pending').length;
-      setPendingDepositCount(pendingDep + pendingWth);
+      void backendApi.admin.getOverview()
+        .then((result) => {
+          const overview = (result as { overview?: { pendingDeposits?: number; pendingWithdrawals?: number } }).overview;
+          setPendingDepositCount(Number(overview?.pendingDeposits || 0) + Number(overview?.pendingWithdrawals || 0));
+        })
+        .catch(() => setPendingDepositCount(0));
     };
 
     const handleInviteBonusCredited = (e: Event) => {

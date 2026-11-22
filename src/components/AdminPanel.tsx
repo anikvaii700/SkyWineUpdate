@@ -91,7 +91,7 @@ import {
 } from '../services/appControlService';
 import { getAllAccountsWithStats, calculateWithdrawableBalance, syncUsersFromFirestore } from '../services/userManagement';
 import { StoredPhoneAccount, ReferralRecord, getStoredPhoneAccounts } from '../services/phoneAuth';
-import { setAdminVisible, getRegisteredAdminPhone, saveRegisteredAdminPhone, isUserAdminAccount } from '../services/adminAuth';
+import { setAdminVisible, getRegisteredAdminPhone, saveRegisteredAdminPhone } from '../services/adminAuth';
 import { db } from '../services/firebase';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 
@@ -222,7 +222,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     return () => { cancelled = true; };
   }, [isOpen, currentUserPhone, onClose]);
 
-  const isAuthorized = serverAdminVerified && isUserAdminAccount(currentUserPhone);
+  const isAuthorized = serverAdminVerified;
 
 
 

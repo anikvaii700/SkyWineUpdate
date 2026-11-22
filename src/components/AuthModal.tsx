@@ -42,6 +42,7 @@ import {
 } from '../services/phoneAuth';
 import { buildReferralLink, getPendingReferralCode } from '../services/referralService';
 import { soundManager } from '../services/audio';
+import { backendApi, mapBackendMeToProfile } from '../services/backendApi';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -119,20 +120,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const fbUser = await signInWithGoogle();
       if (fbUser) {
         const refToApply = referralCodeInput.trim() || getPendingReferralCode();
-        const profile = await getOrCreateUserProfile(fbUser, 100, undefined, undefined, refToApply);
+        if (refToApply) await backendApi.updateProfile({ referralCode: refToApply });
+        const me = await backendApi.getMe();
+        const profile = mapBackendMeToProfile(me, fbUser);
         const appUser: AppUser = {
           uid: fbUser.uid,
-          userCode: profile.userCode,
-          referralCode: profile.referralCode || profile.userCode,
-          displayName: fbUser.displayName || 'Google Player',
+          userCode: me.user.userCode,
+          referralCode: me.user.referralCode || me.user.userCode,
+          displayName: me.user.displayName || fbUser.displayName || 'Google Player',
           email: fbUser.email,
-          phoneNumber: profile.phoneNumber || fbUser.phoneNumber || null,
+          phoneNumber: me.user.phoneNumber || fbUser.phoneNumber || null,
           photoURL: fbUser.photoURL,
           provider: 'google',
         };
         soundManager.playWin();
         onLoginSuccess(appUser, profile);
-        setSuccessMsg('Google জিমেইল দিয়ে সফলভাবে লগইন হয়েছে! স্বাগতম ব্যালেন্স ৳ ১০০.০০ ওয়ালেটে রয়েছে।');
+        setSuccessMsg('Google দিয়ে লগইন সফল হয়েছে! নতুন ওয়ালেট ব্যালেন্স ৳ ০.০০।');
         setTimeout(() => {
           onClose();
         }, 500);
@@ -183,7 +186,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         soundManager.playWin();
         setSuccessMsg(
-          `মোবাইল অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে! শুরুতেই ৳ ১০০.০০ স্বাগতম বোনাস যুক্ত হয়েছে!` +
+          `মোবাইল অ্যাকাউন্ট তৈরি হয়েছে! নতুন ওয়ালেট ব্যালেন্স ৳ ০.০০।` +
             (res.referralBonusApplied ? ' (রেফারেল কোড সফলভাবে যুক্ত হয়েছে)' : '')
         );
         onLoginSuccess(res.user, res.profile);
@@ -225,7 +228,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     try {
       if (currentUser.provider === 'google') {
-        await updateUserPhoneNumber(currentUser.uid, cleanPhone);
+        await backendApi.updateProfile({ phoneNumber: cleanPhone });
       }
       if (userProfile) {
         userProfile.phoneNumber = cleanPhone;

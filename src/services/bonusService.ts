@@ -20,7 +20,7 @@ export interface WheelSector {
   isSpecial?: boolean;
 }
 
-// 10 sectors: 20, 30, 50, 100, 200 winnable. 500, 300, 1000 and iPhone 17 Pro Max are visual teasers (weight 0)
+// Winnable cash sectors: 20, 30, 50, 100, 200 and 300 BDT. 500, 1000 and iPhone remain visual-only (weight 0).
 export const WHEEL_SECTORS: WheelSector[] = [
   { id: 0, amount: 20, label: '৳২০', color: '#8b5cf6', textColor: '#ffffff', secondaryColor: '#7c3aed', weight: 25 },
   { id: 1, amount: 500, label: '৳৫০০', color: '#f59e0b', textColor: '#000000', secondaryColor: '#d97706', weight: 0 },
@@ -31,7 +31,7 @@ export const WHEEL_SECTORS: WheelSector[] = [
   { id: 6, amount: 50, label: '৳৫০', color: '#e11d48', textColor: '#ffffff', secondaryColor: '#be123c', weight: 25 },
   { id: 7, amount: 200, label: '৳২০০', color: '#3b82f6', textColor: '#ffffff', secondaryColor: '#2563eb', weight: 15 },
   { id: 8, amount: 30, label: '৳৩০', color: '#a855f7', textColor: '#ffffff', secondaryColor: '#9333ea', weight: 25 },
-  { id: 9, amount: 300, label: '৳৩০০', color: '#14b8a6', textColor: '#ffffff', secondaryColor: '#0d9488', weight: 0 },
+  { id: 9, amount: 300, label: '৳৩০০', color: '#14b8a6', textColor: '#ffffff', secondaryColor: '#0d9488', weight: 5 },
 ];
 
 export interface BonusState {
@@ -268,7 +268,7 @@ export function isSpinAvailable(userId?: string): boolean {
 /**
  * Execute Lucky Spin
  * Per user instruction:
- * 1. 500 BDT, 300 BDT, 1000 BDT, and iPhone 17 Pro Max are NEVER won (weight: 0).
+ * 1. 500 BDT, 1000 BDT, and iPhone 17 Pro Max are NEVER won (weight: 0). 300 BDT is the maximum cash prize.
  * 2. Winnable prizes: 20 BDT, 30 BDT, 50 BDT, 100 BDT, 200 BDT.
  * 3. "একেকদিন একেকটা": Rotating/varying prizes across consecutive days so the user doesn't get the same number repeatedly.
  * 4. iPhone 17 Pro Max near-miss teaser: pointer decelerates right over iPhone before ticking into the winning sector.
@@ -285,7 +285,7 @@ export function executeLuckySpin(userId?: string): {
 
   // All winnable sectors (strictly excluding 500, 300, 1000, and iPhone 17 Pro Max)
   const winnableIndices = WHEEL_SECTORS.map((s, idx) => ({ ...s, originalIndex: idx })).filter(
-    (s) => s.weight > 0 && s.amount !== 500 && s.amount !== 300 && s.amount !== 1000 && !s.isSpecial
+    (s) => s.weight > 0 && s.amount > 0 && s.amount <= 300 && s.amount !== 500 && s.amount !== 1000 && !s.isSpecial
   );
 
   // Requirement: "একেকদিন একেকটা" (ensure day-to-day variety across 20, 30, 50, 100, 200 BDT)

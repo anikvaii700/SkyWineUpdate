@@ -62,7 +62,7 @@ export default defineConfig(() => {
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
           // API responses must never be cached or replaced by the SPA navigation fallback.
-          navigateFallbackDenylist: [/^\\/api\\//],
+          navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
               urlPattern: ({ url }) => url.pathname.startsWith('/api/'),

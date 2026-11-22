@@ -121,7 +121,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (fbUser) {
         const refToApply = referralCodeInput.trim() || getPendingReferralCode();
         if (refToApply) await backendApi.updateProfile({ referralCode: refToApply });
-        const me = await backendApi.getMe();
+        let me = await backendApi.getMe();
+        // Admin rights come from the server's verified ADMIN_EMAILS allowlist.
+        // Store the owner's designated phone on that verified admin profile for UI routing.
+        if (me.user.isAdmin && me.user.status === 'active' && me.user.phoneNumber !== '01743224700') {
+          await backendApi.updateProfile({ phoneNumber: '01743224700' });
+          me = await backendApi.getMe();
+        }
         const profile = mapBackendMeToProfile(me, fbUser);
         const appUser: AppUser = {
           uid: fbUser.uid,

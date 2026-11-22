@@ -868,6 +868,24 @@ export default function App() {
     });
   }, []);
 
+  const adjustInviteBonusBalance = useCallback((delta: number, lockedDelta: number = 0) => {
+    if (!delta && !lockedDelta) return;
+    const nextInvite = Math.max(0, Math.round((inviteBonusBalanceRef.current + delta) * 100) / 100);
+    inviteBonusBalanceRef.current = nextInvite;
+    setUserProfile((profile) => {
+      if (!profile) return null;
+      const nextLocked = lockedDelta !== 0
+        ? Math.max(0, Math.round(((profile.lockedPrincipal || 0) + lockedDelta) * 100) / 100)
+        : profile.lockedPrincipal;
+      return {
+        ...profile,
+        inviteBonusBalance: nextInvite,
+        ...(lockedDelta !== 0 ? { lockedPrincipal: nextLocked } : {}),
+      };
+    });
+    // Practice bonuses stay local; only server-approved ledger transactions may change real wallet funds.
+  }, []);
+
   // Handle bonus rewards from Lucky Spinner, Daily Open Bonus & 7-Day Streak
   const handleRewardWon = useCallback((amount: number, reason: string) => {
     updateBalanceAndSync((prev) => prev + amount);

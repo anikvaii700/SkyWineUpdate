@@ -69,6 +69,7 @@ import {
   listenToWithdrawalRequests,
 } from '../services/manualPayment';
 import { soundManager } from '../services/audio';
+import { backendApi } from '../services/backendApi';
 import {
   BroadcastNotification,
   getStoredBroadcastNotifications,
@@ -111,6 +112,75 @@ interface AdminPanelProps {
   initialTab?: AdminTabType;
 }
 
+type ApiRow = Record<string, any>;
+
+function mapBackendDeposit(row: ApiRow): ManualDepositRequest {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    userCode: String(row.user_code || ''),
+    userIdentifier: String(row.display_name || row.phone_number || row.email || row.user_id),
+    method: row.method,
+    targetNumber: String(row.target_number || ''),
+    senderNumber: String(row.sender_number || ''),
+    trxId: String(row.trx_id || ''),
+    amount: Number(row.amount || 0),
+    status: row.status,
+    createdAt: String(row.created_at || ''),
+    updatedAt: String(row.updated_at || ''),
+    rejectionReason: row.rejection_reason || undefined,
+    adminNote: row.admin_note || undefined,
+    isFirstDeposit: Boolean(row.is_first_deposit),
+    bonusPercent: Number(row.bonus_percent || 0),
+    bonusAmount: Number(row.bonus_amount || 0),
+    totalCredited: Number(row.total_credited || 0),
+  };
+}
+
+function mapBackendWithdrawal(row: ApiRow): ManualWithdrawalRequest {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    userCode: String(row.user_code || ''),
+    userIdentifier: String(row.display_name || row.phone_number || row.email || row.user_id),
+    method: row.method,
+    personalNumber: String(row.personal_number || ''),
+    amount: Number(row.amount || 0),
+    status: row.status,
+    createdAt: String(row.created_at || ''),
+    updatedAt: String(row.updated_at || ''),
+    adminNote: row.admin_note || undefined,
+    rejectionReason: row.rejection_reason || undefined,
+  };
+}
+
+function mapBackendUser(row: ApiRow) {
+  const balance = Number(row.balance || 0);
+  const locked = Number(row.invite_bonus_locked || 0);
+  const totalDeposited = Number(row.total_deposited || 0);
+  const now = new Date().toISOString();
+  return {
+    uid: String(row.firebase_uid),
+    userCode: String(row.user_code || ''),
+    phoneNumber: String(row.phone_number || ''),
+    displayName: String(row.display_name || 'Player'),
+    balance,
+    lockedPrincipal: locked,
+    withdrawableBalance: Math.max(0, balance - locked),
+    totalDeposited,
+    hasDeposited: totalDeposited > 0,
+    referralCode: String(row.referral_code || ''),
+    referralCount: 0,
+    referralBonusEarned: 0,
+    inviteBonusBalance: locked,
+    status: row.status || 'active',
+    suspendedUntil: null,
+    deactivationReason: undefined,
+    createdAt: String(row.created_at || now),
+    updatedAt: now,
+  };
+}
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   isOpen,
   onClose,
@@ -118,13 +188,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onBalanceAdjusted,
   initialTab,
 }) => {
-  const isAuthorized = isUserAdminAccount(currentUserPhone);
+  const [serverAdminVerified, setServerAdminVerified] = useState<boolean>(false);
 
   useEffect(() => {
-    if (isOpen && !isAuthorized) {
-      onClose();
+    let cancelled = false;
+    if (!isOpen) {
+      setServerAdminVerified(false);
+      return;
     }
-  }, [isOpen, isAuthorized, onClose]);
+    backendApi.getMe()
+      .then((me) => {
+        if (cancelled) return;
+        const allowed = me.user.isAdmin === true && me.user.status === 'active';
+        setServerAdminVerified(allowed);
+        if (allowed) setIsAuthenticated(true);
+        else onClose();
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setServerAdminVerified(false);
+          onClose();
+        }
+      });
+    return () => { cancelled = true; };
+  }, [isOpen, currentUserPhone, onClose]);
+
+  const isAuthorized = serverAdminVerified && isUserAdminAccount(currentUserPhone);
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>('');
@@ -252,40 +341,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Load and subscribe to requests & settings
   const reloadData = () => {
-    setRequests(getStoredDepositRequests());
-    setWithdrawals(getStoredWithdrawalRequests());
+    setRequests([]);
+    setWithdrawals([]);
+    setAccountsWithStats([]);
     setSettings(getStoredPaymentSettings());
-    setAccountsWithStats(getAllAccountsWithStats());
-    setBroadcastList(getStoredBroadcastNotifications());
 
-    // Load local phone accounts
-    try {
-      const raw = localStorage.getItem('aviator_phone_accounts_v1');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        const list = Object.keys(parsed).map((k) => ({
-          uid: parsed[k].uid,
-          phone: parsed[k].phoneNumber,
-          name: parsed[k].displayName,
-          balance: parsed[k].balance || 0,
-        }));
-        setLocalAccounts(list);
+    void Promise.all([
+      backendApi.admin.listDeposits('all'),
+      backendApi.admin.listWithdrawals('all'),
+      backendApi.admin.getPaymentSettings(),
+      backendApi.admin.listUsers('', 100, 0),
+    ]).then(([depositResult, withdrawalResult, settingsResult, userResult]) => {
+      const deposits = (depositResult as { deposits?: ApiRow[] }).deposits || [];
+      const withdrawals = (withdrawalResult as { withdrawals?: ApiRow[] }).withdrawals || [];
+      const paymentSettings = (settingsResult as { paymentSettings?: Partial<SystemPaymentSettings> }).paymentSettings;
+      const users = (userResult as { users?: ApiRow[] }).users || [];
+
+      setRequests(deposits.map(mapBackendDeposit));
+      setWithdrawals(withdrawals.map(mapBackendWithdrawal));
+      const mappedUsers = users.map(mapBackendUser);
+      setAccountsWithStats(mappedUsers as ReturnType<typeof getAllAccountsWithStats>);
+      setLocalAccounts(mappedUsers
+        .filter((u) => Boolean(u.phoneNumber))
+        .map((u) => ({ uid: u.uid, phone: u.phoneNumber, name: u.displayName, balance: u.balance })));
+
+      if (paymentSettings) {
+        const merged = { ...getStoredPaymentSettings(), ...paymentSettings } as SystemPaymentSettings;
+        setSettings(merged);
+        if (merged.marqueeNotice) setMarqueeNotice(merged.marqueeNotice);
       }
-    } catch {}
+    }).catch((err) => {
+      console.error('Admin API load failed:', err);
+      showAdminToast('সার্ভার ডাটা লোড হয়নি', 'পেজ রিফ্রেশ করে আবার চেষ্টা করুন।', 'error');
+    });
+
+    // These non-wallet features remain on their existing service until their APIs are migrated.
+    setBroadcastList(getStoredBroadcastNotifications());
   };
 
   useEffect(() => {
     if (isOpen) {
       reloadData();
-      // Attempt background sync
-      syncPaymentSettingsFromFirestore().then((s) => {
-        setSettings(s);
-        if (s.marqueeNotice) setMarqueeNotice(s.marqueeNotice);
-      });
-      syncDepositRequestsFromFirestore().then((r) => setRequests(r));
-      syncWithdrawalRequestsFromFirestore().then((w) => setWithdrawals(w));
-      syncUsersFromFirestore().then((u) => setAccountsWithStats(u));
-
       // Realtime listener for broadcast notifications
       const unsubBroadcast = listenToBroadcastNotifications((list) => {
         setBroadcastList(list);
@@ -332,14 +428,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   }, [isOpen]);
 
   useEffect(() => {
-    const handleRequestsUpdated = () => setRequests(getStoredDepositRequests());
-    const handleWithdrawalsUpdated = () => setWithdrawals(getStoredWithdrawalRequests());
-    const handleSettingsUpdated = () => {
-      const s = getStoredPaymentSettings();
-      setSettings(s);
-      if (s.marqueeNotice) setMarqueeNotice(s.marqueeNotice);
-    };
-    const handleAccountsUpdated = () => setAccountsWithStats(getAllAccountsWithStats());
+    const handleRequestsUpdated = () => reloadData();
+    const handleWithdrawalsUpdated = () => reloadData();
+    const handleSettingsUpdated = () => reloadData();
+    const handleAccountsUpdated = () => reloadData();
     const handleBalanceCredited = () => {
       reloadData();
       if (onBalanceAdjusted) onBalanceAdjusted();
@@ -469,30 +561,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setPinChangeMsg('');
   };
 
-  // Handle Save Numbers & Settings
+  const buildBackendPaymentPayload = (source: SystemPaymentSettings) => {
+    const minDeposit = Math.max(10, Number(appControls.minDepositAmount || 100));
+    const minWithdrawal = Math.max(50, Number(appControls.minWithdrawAmount || 500));
+    return {
+      bkash: source.bkash,
+      nagad: source.nagad,
+      rocket: source.rocket,
+      minDeposit,
+      maxDeposit: Math.max(minDeposit, Number(appControls.maxDepositAmount || 50000)),
+      minWithdrawal,
+      maxWithdrawal: Math.max(minWithdrawal, Number(appControls.maxWithdrawAmount || 50000)),
+      firstDepositBonusPercent: Math.max(0, Math.min(200, Number(source.firstDepositBonusPercent || 0))),
+      noticeText: source.noticeText || '',
+      withdrawalNoticeText: source.withdrawalNoticeText || '',
+      marqueeNotice,
+      telegramChannel: source.telegramChannel || '',
+      telegramSupport: source.telegramSupport || '',
+    };
+  };
+
+  // Save payment details and limits only through authenticated PostgreSQL admin API.
   const handleSaveSettings = async () => {
     setIsSavingSettings(true);
     setSaveSuccessMsg('');
     try {
-      const mergedSettings = {
-        ...settings,
-        marqueeNotice,
-      };
-      await savePaymentSettings(mergedSettings);
+      await backendApi.admin.updatePaymentSettings(buildBackendPaymentPayload(settings));
       saveActivePlayersSettings(activePlayersSettings);
       localStorage.setItem('aviator_marquee_text', marqueeNotice);
       window.dispatchEvent(new Event('marquee_text_updated'));
-      const msg = 'সেটিংস ও স্ক্রোলিং শিরোনাম সফলভাবে সংরক্ষিত ও ক্লাউডে আপডেট হয়েছে!';
-      setSaveSuccessMsg(msg);
-      showAdminToast(
-        'সফলভাবে সংরক্ষিত ও ক্লাউডে আপডেট হয়েছে!',
-        'আপনার নতুন শিরোনাম ও পেমেন্ট সেটিংস ফায়ারবেস ক্লাউডে সেভ হয়েছে এবং সকল ইউজারের ফোনে এখনই লাইভ পরিবর্তন হয়ে গেছে।',
-        'success'
-      );
+      setSaveSuccessMsg('পেমেন্ট সেটিংস সার্ভারে সংরক্ষিত হয়েছে!');
+      showAdminToast('সেটিংস সংরক্ষণ সফল', 'পেমেন্ট নম্বর ও সীমা সার্ভারে আপডেট হয়েছে।', 'success');
+      reloadData();
       setTimeout(() => setSaveSuccessMsg(''), 5000);
     } catch (e) {
       console.error(e);
-      showAdminToast('সংরক্ষণ ব্যর্থ হয়েছে', 'ইন্টারনেট কানেকশন চেক করে আবার চেষ্টা করুন।', 'error');
+      showAdminToast('সংরক্ষণ ব্যর্থ হয়েছে', 'সার্ভার সংযোগ ও Admin অনুমতি পরীক্ষা করুন।', 'error');
     } finally {
       setIsSavingSettings(false);
     }
@@ -523,7 +627,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const clean = Math.max(0, Math.min(200, Math.round(percent)));
     const nextSettings = { ...settings, firstDepositBonusPercent: clean };
     setSettings(nextSettings);
-    await savePaymentSettings(nextSettings);
+    await backendApi.admin.updatePaymentSettings(buildBackendPaymentPayload(nextSettings));
     showAdminToast(
       `প্রথম ডিপোজিট বোনাস ${clean}% সেট হয়েছে!`,
       'নতুন প্রথম ডিপোজিট বোনাস হার ক্লাউডে আপডেট হয়েছে।',
@@ -531,46 +635,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   };
 
-  // Handle Approve Request
+  // Approve/reject requests using the PostgreSQL ledger and server RBAC.
   const handleApprove = async (req: ManualDepositRequest) => {
     soundManager.playClick();
-    const res = await approveManualDepositRequest(req.id, 'Approved via Admin Panel');
-    if (res.success) {
+    try {
+      const result = await backendApi.admin.approveDeposit(req.id, 'Approved via Admin Panel');
       reloadData();
       if (onBalanceAdjusted) onBalanceAdjusted();
-      const bonusText = res.isFirstDeposit && res.bonusAmount && res.bonusAmount > 0
-        ? ` (মূল ৳${req.amount.toLocaleString()} + প্রথম ডিপোজিট ${res.bonusPercent}% বোনাস ৳${res.bonusAmount.toLocaleString()} = মোট ৳${(res.totalCredited || (req.amount + res.bonusAmount)).toLocaleString()})`
-        : ` ৳${req.amount.toLocaleString()}`;
-      const inviteText = res.inviteBonusRewarded
-        ? ` | রেফারার (${res.inviteBonusRewarded.referrerCode || 'Referrer'}) ১০০% ইনভাইট বোনাস ৳${res.inviteBonusRewarded.bonusAmount.toLocaleString()} পেয়েছে (লকড)।`
-        : '';
+      const deposit = (result as { deposit?: ApiRow }).deposit || {};
+      const credited = Number(deposit.total_credited || req.amount);
       showAdminToast(
         'ডিপোজিট সফলভাবে অনুমোদিত!',
-        `গ্রাহক ${req.userIdentifier}-এর একাউন্টে${bonusText} ব্যালেন্স সফলভাবে যোগ ও বোনাস লক করা হয়েছে।${inviteText}`,
+        `গ্রাহক ${req.userIdentifier}-এর ওয়ালেটে ৳${credited.toLocaleString()} যোগ হয়েছে।`,
         'success'
       );
-    } else {
-      showAdminToast('অনুমোদনে সমস্যা হয়েছে', res.error || 'অনুমোদন ব্যর্থ হয়েছে', 'error');
+    } catch (err) {
+      showAdminToast('অনুমোদনে সমস্যা হয়েছে', err instanceof Error ? err.message : 'অনুমোদন ব্যর্থ হয়েছে', 'error');
     }
   };
 
-  // Handle Reject Request
   const handleReject = async () => {
     if (!rejectingRequestId) return;
     soundManager.playClick();
-    const res = await rejectManualDepositRequest(rejectingRequestId, rejectReason);
-    if (res.success) {
+    try {
+      await backendApi.admin.rejectDeposit(rejectingRequestId, rejectReason);
       setRejectingRequestId(null);
       reloadData();
-      showAdminToast(
-        'ডিপোজিট রিকোয়েস্ট বাতিল করা হয়েছে',
-        'বাতিলের তথ্য সফলভাবে ক্লাউডে রেকর্ড করা হয়েছে।',
-        'error'
-      );
-    } else {
-      showAdminToast('বাতিল করতে সমস্যা হয়েছে', res.error || 'বাতিল ব্যর্থ হয়েছে', 'error');
+      showAdminToast('ডিপোজিট রিকোয়েস্ট বাতিল করা হয়েছে', 'সার্ভারে বাতিলের তথ্য সংরক্ষিত হয়েছে।', 'error');
+    } catch (err) {
+      showAdminToast('বাতিল করতে সমস্যা হয়েছে', err instanceof Error ? err.message : 'বাতিল ব্যর্থ হয়েছে', 'error');
     }
   };
+
 
   // Handle Manual Add Balance to Phone Account
   const handleDirectCreditPhoneAccount = async (phone: string, amount: number) => {
@@ -691,22 +787,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Handle Refresh from Firestore
+  // Refresh wallet/admin data from PostgreSQL.
   const handleRefresh = async () => {
     setIsRefreshing(true);
     soundManager.playClick();
     try {
-      const updatedReqs = await syncDepositRequestsFromFirestore();
-      const updatedWithdrawals = await syncWithdrawalRequestsFromFirestore();
-      const updatedSettings = await syncPaymentSettingsFromFirestore();
-      setRequests(updatedReqs);
-      setWithdrawals(updatedWithdrawals);
-      setSettings(updatedSettings);
-      showAdminToast(
-        'ক্লাউড ডাটা রিফ্রেশ সম্পন্ন!',
-        'ফায়ারবেস ক্লাউড থেকে সর্বশেষ সকল রিকোয়েস্ট ও সেটিংস আপডেট করা হয়েছে।',
-        'info'
-      );
+      await Promise.all([
+        backendApi.admin.listDeposits('all'),
+        backendApi.admin.listWithdrawals('all'),
+        backendApi.admin.getPaymentSettings(),
+        backendApi.admin.listUsers('', 100, 0),
+      ]);
+      reloadData();
+      showAdminToast('সার্ভার ডাটা রিফ্রেশ সম্পন্ন!', 'সর্বশেষ ওয়ালেট, রিকোয়েস্ট ও সেটিংস লোড হয়েছে।', 'info');
+    } catch (err) {
+      showAdminToast('রিফ্রেশ ব্যর্থ', err instanceof Error ? err.message : 'সার্ভার ডাটা পাওয়া যায়নি।', 'error');
     } finally {
       setIsRefreshing(false);
     }
@@ -730,11 +825,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setTimeout(() => setCopiedPersonalNumber(null), 2000);
   };
 
-  // Complete Withdrawal Request (Mark as sent)
   const handleCompleteWithdrawal = async (req: ManualWithdrawalRequest, note?: string) => {
     soundManager.playClick();
-    const res = await completeManualWithdrawalRequest(req.id, note || 'টাকা সফলভাবে পাঠানো হয়েছে');
-    if (res.success) {
+    try {
+      await backendApi.admin.completeWithdrawal(req.id, note || 'টাকা সফলভাবে পাঠানো হয়েছে');
       setCompletingWithdrawal(null);
       reloadData();
       showAdminToast(
@@ -742,31 +836,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         `নম্বর ${req.personalNumber}-এ ৳${req.amount.toLocaleString()} পাঠানো নিশ্চিত করা হয়েছে।`,
         'success'
       );
-    } else {
-      showAdminToast('উত্তোলন সম্পন্ন করতে সমস্যা হয়েছে', res.error || 'ব্যর্থ হয়েছে', 'error');
+    } catch (err) {
+      showAdminToast('উত্তোলন সম্পন্ন করতে সমস্যা হয়েছে', err instanceof Error ? err.message : 'ব্যর্থ হয়েছে', 'error');
     }
   };
 
-  // Reject Withdrawal Request (Refund back to wallet)
   const handleRejectWithdrawalConfirm = async () => {
     if (!rejectingWithdrawalId) return;
     soundManager.playClick();
-    const res = await rejectManualWithdrawalRequest(rejectingWithdrawalId, rejectWithdrawalReason);
-    if (res.success) {
+    try {
+      await backendApi.admin.rejectWithdrawal(rejectingWithdrawalId, rejectWithdrawalReason);
       soundManager.playCrash();
       setRejectingWithdrawalId(null);
       setRejectWithdrawalReason('ভুল বা অসত্য পার্সোনাল নম্বর');
       reloadData();
       if (onBalanceAdjusted) onBalanceAdjusted();
-      showAdminToast(
-        'উত্তোলন রিকোয়েস্ট বাতিল করা হয়েছে',
-        'টাকা স্বয়ংক্রিয়ভাবে গ্রাহকের ওয়ালেটে ফেরত যোগ হয়েছে।',
-        'error'
-      );
-    } else {
-      showAdminToast('বাতিল করতে সমস্যা হয়েছে', res.error || 'ব্যর্থ হয়েছে', 'error');
+      showAdminToast('উত্তোলন রিকোয়েস্ট বাতিল হয়েছে', 'টাকা সার্ভারের ওয়ালেটে ফেরত যোগ হয়েছে।', 'error');
+    } catch (err) {
+      showAdminToast('বাতিল করতে সমস্যা হয়েছে', err instanceof Error ? err.message : 'ব্যর্থ হয়েছে', 'error');
     }
   };
+
 
   // Broadcast notification send handler
   const handleSendBroadcast = async (e?: React.FormEvent) => {

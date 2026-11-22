@@ -2040,6 +2040,7 @@ export default function App() {
 
       <AdminPanel
         isOpen={isAdminOpen && currentUser?.isAdmin === true}
+        serverIsAdmin={currentUser?.isAdmin === true}
         onClose={() => setIsAdminOpen(false)}
         initialTab={adminPanelInitialTab}
         onBalanceAdjusted={() => {

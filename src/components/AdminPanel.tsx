@@ -108,6 +108,7 @@ interface AdminPanelProps {
   isOpen: boolean;
   onClose: () => void;
   currentUserPhone?: string | null;
+  serverIsAdmin: boolean;
   onBalanceAdjusted?: () => void;
   initialTab?: AdminTabType;
 }
@@ -185,11 +186,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   isOpen,
   onClose,
   currentUserPhone,
+  serverIsAdmin,
   onBalanceAdjusted,
   initialTab,
 }) => {
-  const [serverAdminVerified, setServerAdminVerified] = useState<boolean>(false);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  // The parent passes the role verified by Firebase ID token + PostgreSQL.
+  // Every sensitive action is still protected by server-side requireAdmin middleware.
+  const serverAdminVerified = serverIsAdmin;
+  const isAuthenticated = serverIsAdmin;
   const [pinInput, setPinInput] = useState<string>('');
   const [pinError, setPinError] = useState<string>('');
   const [showPin, setShowPin] = useState<boolean>(false);
@@ -199,32 +203,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isSavingControls, setIsSavingControls] = useState<boolean>(false);
   const [allReferrals, setAllReferrals] = useState<ReferralRecord[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!isOpen) {
-      setServerAdminVerified(false);
-      return;
-    }
-    backendApi.getMe()
-      .then((me) => {
-        if (cancelled) return;
-        const allowed = me.user.isAdmin === true && me.user.status === 'active';
-        setServerAdminVerified(allowed);
-        if (allowed) setIsAuthenticated(true);
-        else onClose();
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setServerAdminVerified(false);
-          onClose();
-        }
-      });
-    return () => { cancelled = true; };
-  }, [isOpen, currentUserPhone, onClose]);
-
-  const isAuthorized = serverAdminVerified;
-
-
+  const isAuthorized = serverIsAdmin;
 
   useEffect(() => {
     if (initialTab && isOpen && isAuthorized) {
@@ -441,7 +420,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const latestSettings = getStoredPaymentSettings();
     const activeAdminPin = (latestSettings.adminPin || settings.adminPin || '1234').trim();
     if (pinInput.trim() === activeAdminPin) {
-      setIsAuthenticated(true);
       setPinError('');
       soundManager.playClick();
     } else {

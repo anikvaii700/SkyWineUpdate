@@ -10,7 +10,7 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'autoUpdate',
+        registerType: 'prompt',
         includeAssets: [
           'apple-touch-icon.png',
           'favicon.png',
@@ -69,7 +69,7 @@ export default defineConfig(() => {
               handler: 'NetworkOnly',
             },
           ],
-          skipWaiting: true,
+          // The new worker waits until the user chooses to update.
           clientsClaim: true,
           cleanupOutdatedCaches: true,
         },

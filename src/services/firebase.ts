@@ -116,7 +116,7 @@ export async function signUpWithPhone(
   await updateProfile(userCredential.user, {
     displayName,
   });
-  await getOrCreateUserProfile(userCredential.user, 0, displayPhone, displayName);
+  // PostgreSQL provisions the profile and zero-balance wallet on the first authenticated API request.
   return userCredential.user;
 }
 

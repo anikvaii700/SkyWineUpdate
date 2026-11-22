@@ -36,7 +36,7 @@ export const defaultTokenVerifier: TokenVerifier = async (idToken: string): Prom
     const email = typeof decoded.email === 'string' ? decoded.email.toLowerCase() : null;
     // The app maps phone numbers to a Firebase Email/Password alias.
     // Only extract the phone from the verified Firebase token, never from request payloads.
-    const phoneAlias = email?.match(/^user_(01[0-9]{9})@phone\\.aviator\\.bd$/i);
+    const phoneAlias = email?.match(/^user_(01[0-9]{9})@phone\.aviator\.bd$/i);
     const verifiedPhone = typeof decoded.phone_number === 'string' ? decoded.phone_number : null;
 
     return {

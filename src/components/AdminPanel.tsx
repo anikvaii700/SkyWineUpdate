@@ -399,10 +399,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       });
 
       return () => {
-        if (unsubUsers) unsubUsers();
         unsubBroadcast();
-        unsubDeposits();
-        unsubWithdrawals();
         unsubControls();
         unsubReferrals();
       };

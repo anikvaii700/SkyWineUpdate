@@ -492,16 +492,16 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-white">৩. দৈনিক লাকি স্পিনার</h3>
-                  <span className="text-[11px] text-rose-300">২০৳ থেকে ৫০০৳ ও iPhone 17 Pro Max</span>
+                  <span className="text-[11px] text-rose-300">২০৳ থেকে ৩০০৳ ও iPhone 17 Pro Max</span>
                 </div>
               </div>
               <div className="px-2.5 py-0.5 rounded-full bg-rose-500/20 border border-rose-500/50 text-rose-300 font-mono font-black text-sm">
-                ২০-৫০০৳
+                ২০-৩০০৳
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed mb-3">
-              চাকা ঘুরিয়ে প্রতি স্পিনে ২০ টাকা থেকে সর্বোচ্চ ৫০০ টাকা নগদ বোনাস জিতুন! সাথে থাকছে বিশেষ iPhone 17 Pro Max ট্রাই করার সুযোগ!
+              চাকা ঘুরিয়ে প্রতি স্পিনে ২০ টাকা থেকে সর্বোচ্চ ৩০০ টাকা নগদ বোনাস জিতুন! সাথে থাকছে বিশেষ iPhone 17 Pro Max ট্রাই করার সুযোগ!
             </p>
 
             <button

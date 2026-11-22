@@ -443,7 +443,7 @@ export default function App() {
           };
           setCurrentUser(appUser);
           setUserProfile(profile);
-          setBalance(me.wallet.balance);
+          setBalance(INITIAL_BALANCE);
         } catch (err) {
           console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
@@ -2020,7 +2020,7 @@ export default function App() {
         onLoginSuccess={(user, profile) => {
           setCurrentUser(user);
           setUserProfile(profile);
-          setBalance(profile.balance);
+          setBalance(INITIAL_BALANCE);
           setAuthNoticeMessage(null);
         }}
         onLogoutSuccess={() => {

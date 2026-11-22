@@ -42,7 +42,7 @@ export const Header: React.FC<HeaderProps> = ({
   // Stealth method: Tap the SkyWin brand logo 5 times to open Admin Panel
   // STRICT: Only allowed if logged in as 01743224700. For everyone else, zero hint or access.
   const logoClicksRef = useRef<number>(0);
-  const lastClickTimeRef = useRef<number>(0);
+  const firstClickTimeRef = useRef<number>(0);
   const isAdmin = currentUser?.isAdmin === true;
 
   const handleLogoClick = (e: React.MouseEvent | React.TouchEvent) => {
@@ -56,13 +56,16 @@ export const Header: React.FC<HeaderProps> = ({
     }
 
     const now = Date.now();
-    const isFastClick = now - lastClickTimeRef.current < 2500;
-    const nextCount = isFastClick ? logoClicksRef.current + 1 : 1;
+    // Count five taps inside one 8-second gesture window (mobile browsers may delay clicks).
+    const withinGestureWindow =
+      firstClickTimeRef.current > 0 && now - firstClickTimeRef.current <= 8000;
+    const nextCount = withinGestureWindow ? logoClicksRef.current + 1 : 1;
+    if (nextCount === 1) firstClickTimeRef.current = now;
     logoClicksRef.current = nextCount;
-    lastClickTimeRef.current = now;
 
     if (nextCount >= 5) {
       logoClicksRef.current = 0;
+      firstClickTimeRef.current = 0;
       soundManager.playWin();
       onOpenAdmin();
     } else {

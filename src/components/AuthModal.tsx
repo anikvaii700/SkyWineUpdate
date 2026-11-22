@@ -503,7 +503,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </div>
 
                       <p className="text-[10px] text-slate-400 bg-emerald-950/30 p-2 rounded-xl border border-emerald-900/30 leading-snug">
-                        💡 <span className="text-emerald-300 font-semibold">ক্যাশআউট নিয়ম:</span> মিনিমাম ক্যাশআউট ৫০০ টাকা। ইনভাইট বোনাস ১০০% ও অন্যান্য বোনাস সরাসরি উত্তোলন করা যাবে না এবং ইনভাইট বোনাস দিয়ে লাভবান হওয়া যাবে না।
+                        💡 <span className="text-emerald-300 font-semibold">ক্যাশআউট নিয়ম:</span> ন্যূনতম ক্যাশআউট ৫০০ টাকা। উত্তোলনের পরিমাণ উপরের উত্তোলনযোগ্য ব্যালেন্স অনুযায়ী গণনা হবে।
                       </p>
                     </div>
 
@@ -562,9 +562,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         <span>মোট ইনভাইট বোনাস: <strong className="text-emerald-400 font-mono">৳ {referralBonus.toLocaleString()}</strong></span>
                       </div>
 
-                      <p className="text-[10px] text-rose-300/90 bg-rose-950/30 border border-rose-500/30 rounded-lg px-2 py-1.5 leading-snug">
-                        বি:দ্র: ইনভাইট বোনাসের টাকা উঠাতে পারবেন না এবং সেই টাকা দিয়ে কখনই লাভবান হওয়া যাবে না।
-                      </p>
                     </div>
                   </>
                 );

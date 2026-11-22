@@ -138,6 +138,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           phoneNumber: me.user.phoneNumber || fbUser.phoneNumber || null,
           photoURL: fbUser.photoURL,
           provider: 'google',
+          isAdmin: me.user.isAdmin === true,
+          status: me.user.status as AppUser['status'],
         };
         soundManager.playWin();
         onLoginSuccess(appUser, profile);

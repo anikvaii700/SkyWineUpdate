@@ -39,32 +39,16 @@ import {
 } from './services/bonusService';
 import confetti from 'canvas-confetti';
 import {
-  getStoredDepositRequests,
-  getStoredWithdrawalRequests,
   getStoredPaymentSettings,
   SystemPaymentSettings,
-  listenToDepositRequests,
-  listenToWithdrawalRequests,
 } from './services/manualPayment';
 import { soundManager } from './services/audio';
 import { backendApi, mapBackendMeToProfile } from './services/backendApi';
 import { Language, translations } from './utils/i18n';
-import {
-  auth,
-  db,
-  getOrCreateUserProfile,
-  syncUserBalanceToFirestore,
-  recordWalletTransaction,
-  recordBetHistory,
-  UserWalletProfile,
-} from './services/firebase';
-import { doc, onSnapshot, getDoc } from 'firebase/firestore';
+import { auth, UserWalletProfile } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   AppUser,
-  getActivePhoneSession,
-  syncPhoneAccountBalance,
-  updatePhoneAccountBalanceLocally,
   checkAccountSuspensionStatus,
   logoutPhoneSession,
 } from './services/phoneAuth';
@@ -72,7 +56,6 @@ import { recordUserBet } from './services/userManagement';
 import {
   captureReferralCodeFromUrl,
   computeInviteBonusStake,
-  syncInviteBonusBalance,
 } from './services/referralService';
 import {
   AppControlConfig,
@@ -270,8 +253,7 @@ export default function App() {
       !showSplash &&
       capturedUrlReferralRef.current &&
       !hasAutoPromptedReferralAuthRef.current &&
-      !currentUser &&
-      !getActivePhoneSession()
+      !currentUser
     ) {
       hasAutoPromptedReferralAuthRef.current = true;
       hasAutoPromptedSpinnerRef.current = true;
@@ -1211,9 +1193,6 @@ export default function App() {
       outcome: 'won',
     });
 
-    if (currentUser && currentUser.provider === 'google') {
-      recordBetHistory(currentUser.uid, 'aviator', currentBet.amount, mult, actualWin, 'won');
-    }
     setWinNotification({ amount: actualWin, multiplier: mult });
 
     setMyBetHistory((prev) => [

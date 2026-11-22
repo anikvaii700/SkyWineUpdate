@@ -18,7 +18,6 @@ import { WingoGame } from './components/WingoGame';
 import { AuthModal } from './components/AuthModal';
 import { AdminPanel } from './components/AdminPanel';
 import { AdminNotificationBanner } from './components/AdminNotificationBanner';
-import { isUserAdminAccount } from './services/adminAuth';
 import { UserBalanceAlertToast, UserAlertToastData } from './components/UserBalanceAlertToast';
 import { LuckySpinnerModal } from './components/LuckySpinnerModal';
 import { DailyBonusModal } from './components/DailyBonusModal';
@@ -439,6 +438,7 @@ export default function App() {
             phoneNumber: me.user.phoneNumber || user.phoneNumber || null,
             photoURL: user.photoURL,
             provider: isPhoneAlias ? 'phone' : 'google',
+            isAdmin: me.user.isAdmin === true,
             status: me.user.status as AppUser['status'],
           };
           setCurrentUser(appUser);
@@ -509,7 +509,7 @@ export default function App() {
     };
 
     const updatePendingCount = () => {
-      if (!isUserAdminAccount(currentUser?.phoneNumber)) {
+      if (!currentUser?.isAdmin === true) {
         setPendingDepositCount(0);
         return;
       }
@@ -1756,7 +1756,7 @@ export default function App() {
 
       {/* Real-time Admin Notification Banner for Add Money & Cashout requests */}
       <AdminNotificationBanner
-        currentUserPhone={currentUser?.phoneNumber}
+        currentUserIsAdmin={currentUser?.isAdmin === true}
         onOpenAdminPanel={handleOpenAdminPanelWithTab}
       />
 
@@ -2040,7 +2040,6 @@ export default function App() {
 
       <AdminPanel
         isOpen={isAdminOpen && isUserAdminAccount(currentUser?.phoneNumber)}
-        currentUserPhone={currentUser?.phoneNumber}
         onClose={() => setIsAdminOpen(false)}
         initialTab={adminPanelInitialTab}
         onBalanceAdjusted={() => {

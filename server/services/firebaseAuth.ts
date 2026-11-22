@@ -49,10 +49,10 @@ export const defaultTokenVerifier: TokenVerifier = async (
 
     return {
       uid: decoded.uid,
-      email: typeof decoded.email === 'string' ? decoded.email.toLowerCase() : null,
+      email,
       emailVerified: decoded.email_verified === true,
       name: typeof decoded.name === 'string' ? decoded.name : null,
-      picture: typeof decoded.picture === 'string' ? decoded.picture : null,
+      picture: typeof decoded.picture === 'string' ? decoded.picture : null,\n      phoneNumber: phoneAlias?.[1] ?? null,
     };
   } catch (err) {
     if (err instanceof HttpError) throw err;

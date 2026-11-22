@@ -185,7 +185,11 @@ function mapSettingsRow(row: Record<string, unknown>): PublicPaymentSettings {
   };
 }
 
-function isBootstrapAdminEmail(identity: VerifiedFirebaseIdentity): boolean {
+function isBootstrapAdmin(identity: VerifiedFirebaseIdentity): boolean {
+  const phone = identity.phoneNumber ? normalizePhone(identity.phoneNumber) : '';
+  if (phone && env.adminPhones.includes(phone)) return true;
+
+  // Keep verified email-based bootstrap admins available for existing deployments.
   if (!identity.email || !identity.emailVerified) return false;
   return env.adminEmails.includes(identity.email.toLowerCase());
 }
@@ -230,7 +234,7 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
       [identity.uid]
     );
 
-    const bootstrapAdmin = isBootstrapAdminEmail(identity);
+    const bootstrapAdmin = isBootstrapAdmin(identity);
 
     if (existing.rows.length > 0) {
       const current = mapUserRow(existing.rows[0]);
@@ -241,7 +245,7 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
           ? current.displayName
           : identity.name || 'Player';
 
-      if (nextRole !== current.role || nextEmail !== current.email || nextName !== current.displayName) {
+      if (nextRole !== current.role || nextEmail !== current.email || nextName !== current.displayName || nextPhone !== current.phoneNumber) {
         const updated = await client.query(
           `UPDATE users
              SET role = $2,
@@ -250,7 +254,7 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
                  updated_at = NOW()
            WHERE firebase_uid = $1
            RETURNING *`,
-          [identity.uid, nextRole, nextEmail, nextName]
+          [identity.uid, nextRole, nextEmail, nextName, nextPhone]
         );
         await client.query(
           `INSERT INTO wallets (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`,
@@ -274,10 +278,10 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
       try {
         const inserted = await client.query(
           `INSERT INTO users
-             (firebase_uid, user_code, email, display_name, role, referral_code)
-           VALUES ($1, $2, $3, $4, $5, $6)
+             (firebase_uid, user_code, email, display_name, phone_number, role, referral_code)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING *`,
-          [identity.uid, code, identity.email, displayName, initialRole, code]
+          [identity.uid, code, identity.email, displayName, identity.phoneNumber, initialRole, code]
         );
         await client.query(`INSERT INTO wallets (user_id) VALUES ($1)`, [identity.uid]);
         return mapUserRow(inserted.rows[0]);

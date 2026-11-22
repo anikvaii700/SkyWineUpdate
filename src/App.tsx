@@ -74,6 +74,33 @@ import { Plane, LogOut, Ban, ShieldAlert } from 'lucide-react';
 
 const INITIAL_BALANCE = 0; // Starts at 0 for real authenticated accounts
 
+// Per-device practice/reward adjustment layered over the authoritative server wallet.
+// Server cash-out eligibility remains governed by the PostgreSQL wallet ledger.
+const LOCAL_WALLET_ADJUSTMENT_PREFIX = 'skywin_wallet_adjustment_v1_';
+
+function getLocalWalletAdjustment(uid?: string | null): number {
+  if (!uid || typeof localStorage === 'undefined') return 0;
+  try {
+    const raw = localStorage.getItem(`${LOCAL_WALLET_ADJUSTMENT_PREFIX}${uid}`);
+    const amount = raw === null ? 0 : Number(raw);
+    return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveLocalWalletAdjustment(uid: string | null | undefined, amount: number): void {
+  if (!uid || typeof localStorage === 'undefined') return;
+  try {
+    const rounded = Math.round(amount * 100) / 100;
+    const key = `${LOCAL_WALLET_ADJUSTMENT_PREFIX}${uid}`;
+    if (Math.abs(rounded) < 0.005) localStorage.removeItem(key);
+    else localStorage.setItem(key, String(rounded));
+  } catch (error) {
+    console.warn('Could not persist local practice wallet adjustment:', error);
+  }
+}
+
 export default function App() {
   const [balance, setBalance] = useState<number>(INITIAL_BALANCE);
   const [roundStatus, setRoundStatus] = useState<RoundStatus>('WAITING');
@@ -212,13 +239,19 @@ export default function App() {
   }, [bet2]);
 
   const balanceRef = useRef(balance);
+  const serverWalletBalanceRef = useRef<number | null>(null);
   const userProfileRef = useRef(userProfile);
   const currentUserRef = useRef(currentUser);
   const inviteBonusBalanceRef = useRef<number>(0);
 
   useEffect(() => {
     balanceRef.current = balance;
-  }, [balance]);
+    const uid = currentUser?.uid;
+    const serverBase = serverWalletBalanceRef.current;
+    if (uid && serverBase !== null) {
+      saveLocalWalletAdjustment(uid, balance - serverBase);
+    }
+  }, [balance, currentUser?.uid]);
 
   useEffect(() => {
     userProfileRef.current = userProfile;
@@ -443,18 +476,21 @@ export default function App() {
           };
           setCurrentUser(appUser);
           setUserProfile(profile);
-          setBalance(INITIAL_BALANCE);
+          serverWalletBalanceRef.current = me.wallet.balance;
+          setBalance(Math.max(0, Math.round((me.wallet.balance + getLocalWalletAdjustment(user.uid)) * 100) / 100));
         } catch (err) {
           console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
           setUserProfile(null);
           setBalance(0);
+          serverWalletBalanceRef.current = null;
           setAuthNoticeMessage('সার্ভারের সাথে সংযোগ হয়নি। কিছুক্ষণ পর আবার লগইন করুন।');
         }
       } else {
         setCurrentUser(null);
         setUserProfile(null);
         setBalance(0);
+        serverWalletBalanceRef.current = null;
       }
     });
 
@@ -540,24 +576,46 @@ export default function App() {
       if (isMatch) {
         soundManager.playWin();
         const amt = Math.round(detail.bonusAmount * 100) / 100;
-        const nextInvite = Math.round((inviteBonusBalanceRef.current + amt) * 100) / 100;
-        inviteBonusBalanceRef.current = nextInvite;
-        setBalance((prev) => Math.round((prev + amt) * 100) / 100);
-        setUserProfile((p) =>
-          p
-            ? {
-                ...p,
-                balance: Math.round(((p.balance || 0) + amt) * 100) / 100,
-                inviteBonusBalance: nextInvite,
-                referralBonusEarned: Math.round(((p.referralBonusEarned || 0) + amt) * 100) / 100,
-                lockedPrincipal: Math.round(((p.lockedPrincipal || 0) + amt) * 100) / 100,
+
+        if (auth.currentUser) {
+          // PostgreSQL approval flow credits the same wallet ledger. Refresh that one balance
+          // instead of adding a second client-side copy of the referral bonus.
+          void backendApi.getMe().then((me) => {
+            const serverBalance = Math.max(0, Number(me.wallet.balance || 0));
+            const previousServerBalance = serverWalletBalanceRef.current;
+            if (previousServerBalance === null) {
+              serverWalletBalanceRef.current = serverBalance;
+              setBalance(Math.max(0, Math.round((serverBalance + getLocalWalletAdjustment(currentUser.uid)) * 100) / 100));
+            } else {
+              const delta = Math.round((serverBalance - previousServerBalance) * 100) / 100;
+              serverWalletBalanceRef.current = serverBalance;
+              if (delta !== 0) {
+                setBalance((prev) => Math.max(0, Math.round((prev + delta) * 100) / 100));
               }
-            : null
-        );
+            }
+            setUserProfile(mapBackendMeToProfile(me, auth.currentUser));
+          }).catch((err) => console.warn('Could not refresh referral wallet credit:', err));
+        } else {
+          const nextInvite = Math.round((inviteBonusBalanceRef.current + amt) * 100) / 100;
+          inviteBonusBalanceRef.current = nextInvite;
+          setBalance((prev) => Math.round((prev + amt) * 100) / 100);
+          setUserProfile((p) =>
+            p
+              ? {
+                  ...p,
+                  balance: Math.round(((p.balance || 0) + amt) * 100) / 100,
+                  inviteBonusBalance: nextInvite,
+                  referralBonusEarned: Math.round(((p.referralBonusEarned || 0) + amt) * 100) / 100,
+                  lockedPrincipal: Math.round(((p.lockedPrincipal || 0) + amt) * 100) / 100,
+                }
+              : null
+          );
+        }
+
         setUserAlertToast({
           title: '🎁 ১০০% ইনভাইট বোনাস যুক্ত হয়েছে!',
           message: `আপনার ইনভাইট করা বন্ধু (${detail.depositorName || 'বন্ধু'}) প্রথম ডিপোজিট করায় ৳${amt.toLocaleString()} (১০০%) ইনভাইট বোনাস পেয়েছেন!`,
-          details: 'ইনভাইট বোনাস আলাদা Promotional Balance-এ জমা হয়। এটি সরাসরি Cash-out করা যায় না; বোনাস-ভিত্তিক গেম রাউন্ডে অতিরিক্ত নগদ জয়ের অর্থ যোগ হয় না।',
+          details: 'রেফারেল বোনাস আপনার মোট ওয়ালেট ব্যালেন্সে যোগ হয়।',
           type: 'success',
         });
       }
@@ -672,7 +730,21 @@ export default function App() {
           withdrawalStatuses.set(id, status);
         }
 
-        // Refresh profile metadata only. Keep the simulated game balance local.
+        // Merge server wallet changes into the same visible balance instead of showing
+        // the PostgreSQL wallet and local bonus/game amount as separate balances.
+        const serverBalance = Math.max(0, Number(me.wallet.balance || 0));
+        const previousServerBalance = serverWalletBalanceRef.current;
+        if (previousServerBalance === null) {
+          serverWalletBalanceRef.current = serverBalance;
+          setBalance((current) => current === 0
+            ? Math.max(0, Math.round((serverBalance + getLocalWalletAdjustment(currentUser?.uid)) * 100) / 100)
+            : current);
+        } else if (serverBalance !== previousServerBalance) {
+          const serverDelta = Math.round((serverBalance - previousServerBalance) * 100) / 100;
+          serverWalletBalanceRef.current = serverBalance;
+          setBalance((current) => Math.max(0, Math.round((current + serverDelta) * 100) / 100));
+        }
+
         setUserProfile(mapBackendMeToProfile(me, auth.currentUser));
         initialLoad = false;
       } catch (err) {
@@ -695,8 +767,8 @@ export default function App() {
 
   // Sync balance updates with Firestore cloud wallet or Phone Account storage
   const updateBalanceAndSync = useCallback((updater: (prev: number) => number) => {
-    // Game-round balance remains a local practice display until bet/cashout endpoints exist.
-    // It never writes or mutates the authoritative PostgreSQL wallet.
+    // Keep one visible total for deposit + practice game + spinner/streak rewards.
+    // Practice adjustments persist on this device; server cash-out eligibility remains server-ledger based.
     setBalance((prev) => {
       const next = Math.max(0, Math.round(updater(prev) * 100) / 100);
       setUserProfile((profile) => (profile ? { ...profile, balance: next } : null));
@@ -2020,13 +2092,16 @@ export default function App() {
         onLoginSuccess={(user, profile) => {
           setCurrentUser(user);
           setUserProfile(profile);
-          setBalance(INITIAL_BALANCE);
+          const serverBase = profile.balance || 0;
+          if (auth.currentUser) serverWalletBalanceRef.current = serverBase;
+          setBalance(Math.max(0, Math.round((serverBase + getLocalWalletAdjustment(user.uid)) * 100) / 100));
           setAuthNoticeMessage(null);
         }}
         onLogoutSuccess={() => {
           setCurrentUser(null);
           setUserProfile(null);
           setBalance(INITIAL_BALANCE);
+          serverWalletBalanceRef.current = null;
           setAuthNoticeMessage(null);
         }}
         onResetBalance={() => {

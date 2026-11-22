@@ -85,7 +85,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   const [paymentSettings, setPaymentSettings] = useState<SystemPaymentSettings>(getStoredPaymentSettings);
   const [serverWallet, setServerWallet] = useState<{ balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } | null>(null);
   const [serverMode, setServerMode] = useState<boolean>(Boolean(auth.currentUser));
-  const displayedBalance = serverMode && serverWallet ? serverWallet.balance : currentBalance;
+  // One user-facing wallet amount combines the current server wallet and in-session rewards/game balance.
+  const displayedBalance = currentBalance;
   const [userRequests, setUserRequests] = useState<ManualDepositRequest[]>([]);
   const [userWithdrawals, setUserWithdrawals] = useState<ManualWithdrawalRequest[]>([]);
 
@@ -1281,47 +1282,20 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                   </p>
                 </div>
 
-                {/* Balance & Rules Breakdown */}
-                <div className="bg-[#0b101a] border border-[#1e2a3f] rounded-2xl p-3.5 space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-[#080d16] p-2.5 rounded-xl border border-amber-500/30">
-                      <span className="text-[10px] text-slate-400 block font-medium">অ-উত্তোলনযোগ্য বোনাস/কমিশন:</span>
-                      <span className="font-bold text-amber-300 font-mono text-sm">৳ {bonusInfo.totalLockedBonuses.toLocaleString()}</span>
-                      <span className="text-[9.5px] text-slate-500 block mt-0.5">(খেলার জন্য সংরক্ষিত)</span>
-                    </div>
-                    <div className="bg-[#080d16] p-2.5 rounded-xl border border-emerald-500/30">
-                      <span className="text-[10px] text-slate-400 block font-medium">উইন হওয়া উত্তোলনযোগ্য লাভ:</span>
-                      <span className="font-bold text-emerald-400 font-mono text-sm">৳ {bonusInfo.withdrawableAmount.toLocaleString()}</span>
-                      <span className="text-[9.5px] text-emerald-400/80 block mt-0.5">(ক্যাশআউট যোগ্য)</span>
-                    </div>
+                {/* Single combined wallet amount */}
+                <div className="bg-[#0b101a] border border-cyan-500/30 rounded-2xl p-3.5 space-y-2">
+                  <div className="bg-[#080d16] p-3 rounded-xl border border-cyan-500/30 text-center">
+                    <span className="text-[11px] text-slate-400 block font-semibold">মোট ওয়ালেট ব্যালেন্স</span>
+                    <span className="font-black text-cyan-300 font-mono text-2xl">
+                      ৳ {displayedBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block mt-1">
+                      ডিপোজিট, বোনাস, স্পিন ও রেফারেল রিওয়ার্ড একই মোট ব্যালেন্সে দেখানো হয়।
+                    </span>
                   </div>
-
-                  {/* Bonus breakdown details badge */}
-                  {bonusInfo.totalLockedBonuses > 0 && (
-                    <div className="p-2 rounded-lg bg-[#0e1522] border border-[#1d293d] text-[10px] text-slate-400 flex flex-wrap gap-x-3 gap-y-1">
-                      <span>• ওয়েলকাম বোনাস: <strong className="text-slate-300">৳{bonusInfo.initialBonus}</strong></span>
-                      {bonusInfo.firstDepBonus > 0 && (
-                        <span>• ১ম ডিপোজিট বোনাস: <strong className="text-amber-300">৳{bonusInfo.firstDepBonus.toLocaleString()}</strong></span>
-                      )}
-                      {bonusInfo.refBonus > 0 && (
-                        <span>• ইনভাইট বোনাস ১০০% (লকড): <strong className="text-cyan-300">৳{bonusInfo.refBonus.toLocaleString()}</strong></span>
-                      )}
-                      {bonusInfo.rewardBonus > 0 && (
-                        <span>• রিওয়ার্ড বোনাস: <strong className="text-amber-300">৳{bonusInfo.rewardBonus.toLocaleString()}</strong></span>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="bg-amber-950/25 border border-amber-800/30 rounded-xl p-2.5 text-[10.5px] text-slate-300 leading-snug space-y-1">
-                    <p className="font-bold text-amber-300 flex items-center gap-1">
-                      <Info className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span>ক্যাশআউট ও বোনাস নীতিমালা:</span>
-                    </p>
-                    <ul className="space-y-0.5 list-disc pl-3.5 text-slate-300 text-[10px]">
-                      <li><strong>বোনাস ও ইনভাইট বোনাস ১০০%:</strong> সকল বোনাস টাকা (ওয়েলকাম, ১ম ডিপোজিট, ইনভাইট বোনাস ১০০%) কখনই উত্তোলন করা যাবে না এবং ইনভাইট বোনাস দিয়ে লাভবান হওয়া যাবে না।</li>
-                      <li><strong>উত্তোলনযোগ্য অর্থ:</strong> শুধুমাত্র নিজস্ব ডিপোজিট থেকে গেম খেলে উইন হওয়া টাকা উইথড্র দিতে পারবেন।</li>
-                      <li><strong>সীমা:</strong> মিনিমাম ক্যাশআউট <strong>৳ ৫০০</strong> এবং একাউন্টে সর্বনিম্ন <strong>৳ ১০০</strong> ব্যালেন্স সংরক্ষিত থাকতে হবে।</li>
-                    </ul>
+                  <div className="bg-amber-950/20 border border-amber-800/25 rounded-xl p-2.5 text-[10.5px] text-slate-300 leading-snug">
+                    <span className="font-bold text-amber-300">ক্যাশআউটের নিয়ম:</span>
+                    উত্তোলনের জন্য যোগ্য পরিমাণ আপনার ডিপোজিট, গেমের ফলাফল ও বিদ্যমান বোনাস নীতিমালা অনুযায়ী গণনা হবে।
                   </div>
                 </div>
 

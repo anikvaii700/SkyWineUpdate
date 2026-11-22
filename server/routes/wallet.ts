@@ -199,17 +199,42 @@ export function createWalletRouter(requireAuth: RequestHandler): Router {
       const uid = req.authUser!.firebaseUid;
       const result = await query(
         `SELECT r.id, r.status, r.reward_amount, r.created_at, r.rewarded_at,
-                u.user_code AS referred_user_code, u.display_name AS referred_name
+                u.firebase_uid AS referred_uid,
+                u.user_code AS referred_user_code,
+                u.display_name AS referred_name,
+                u.phone_number AS referred_phone,
+                COALESCE(first_deposit.amount, 0) AS first_deposit_amount
            FROM referrals r
            JOIN users u ON u.firebase_uid = r.referred_uid
+           LEFT JOIN LATERAL (
+             SELECT d.amount
+               FROM deposit_requests d
+              WHERE d.user_id = r.referred_uid
+                AND d.status = 'approved'
+                AND d.is_first_deposit = TRUE
+              ORDER BY d.reviewed_at ASC
+              LIMIT 1
+           ) AS first_deposit ON TRUE
           WHERE r.referrer_uid = $1
           ORDER BY r.created_at DESC
           LIMIT 100`,
         [uid]
       );
+      const referrals = result.rows.map((row) => ({
+        id: String(row.id),
+        status: row.status === 'rewarded' ? 'rewarded' : 'pending',
+        bonus_amount: Number(row.reward_amount || 0),
+        created_at: new Date(String(row.created_at)).toISOString(),
+        rewarded_at: row.rewarded_at ? new Date(String(row.rewarded_at)).toISOString() : null,
+        referred_uid: String(row.referred_uid),
+        referred_user_code: String(row.referred_user_code),
+        referred_name: String(row.referred_name || 'Player'),
+        referred_phone: row.referred_phone ? String(row.referred_phone) : '',
+        first_deposit_amount: Number(row.first_deposit_amount || 0),
+      }));
       res.json({
         referralCode: req.authUser!.referralCode,
-        referrals: result.rows,
+        referrals,
       });
     } catch (err) {
       next(err);

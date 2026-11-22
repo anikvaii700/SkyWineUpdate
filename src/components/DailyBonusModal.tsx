@@ -13,8 +13,6 @@ import {
   Copy,
   Check,
   Share2,
-  Lock,
-  AlertTriangle,
   Clock,
   UserPlus,
 } from 'lucide-react';
@@ -27,6 +25,8 @@ import {
   BonusState,
 } from '../services/bonusService';
 import { AppUser, ReferralRecord } from '../services/phoneAuth';
+import { auth } from '../services/firebase';
+import { backendApi } from '../services/backendApi';
 import { UserWalletProfile } from '../services/firebase';
 import { buildReferralLink, listenToUserReferrals } from '../services/referralService';
 
@@ -89,16 +89,51 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
     currentUser?.userCode ||
     (currentUser ? `USER-${currentUser.uid.slice(-5).toUpperCase()}` : '');
 
-  // Real-time listener for user's invited friends & 100% first-deposit rewards
+  // Referral reporting comes from the authenticated server for Firebase accounts.
+  // Legacy guest/phone-only sessions retain the existing Firestore listener.
   useEffect(() => {
+    let cancelled = false;
     if (!isOpen || !currentUser || !userRefCode) {
       setReferrals([]);
       return;
     }
+
+    if (auth.currentUser) {
+      backendApi.getMyReferrals()
+        .then((result) => {
+          if (cancelled) return;
+          const records: ReferralRecord[] = result.referrals.map((row) => ({
+            id: String(row.id),
+            referrerUid: currentUser.uid,
+            referrerCode: result.referralCode || userRefCode,
+            referredUid: row.referred_uid || '',
+            referredUserCode: String(row.referred_user_code || ''),
+            referredPhone: String(row.referred_phone || ''),
+            referredName: String(row.referred_name || 'Player'),
+            firstDepositAmount: Number(row.first_deposit_amount || 0),
+            bonusAmount: Number(row.bonus_amount || 0),
+            status: row.status === 'rewarded' ? 'rewarded' : 'pending_deposit',
+            createdAt: String(row.created_at || new Date().toISOString()),
+            rewardedAt: row.rewarded_at || undefined,
+          }));
+          setReferrals(records);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.warn('Server referral summary could not be loaded:', err);
+            setReferrals([]);
+          }
+        });
+      return () => { cancelled = true; };
+    }
+
     const unsub = listenToUserReferrals(userRefCode, currentUser.uid, (records) => {
-      setReferrals(records);
+      if (!cancelled) setReferrals(records);
     });
-    return () => unsub();
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, [isOpen, currentUser?.uid, userRefCode]);
 
   if (!isOpen) return null;
@@ -119,7 +154,6 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
     userProfile?.referralBonusEarned || 0,
     referrals.reduce((sum, r) => sum + (r.bonusAmount || 0), 0)
   );
-  const activeInviteBonusBalance = userProfile?.inviteBonusBalance ?? 0;
 
   const handleCopyLink = () => {
     if (!referralLink) return;
@@ -295,19 +329,6 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
                   </div>
                 </div>
 
-                {/* Active Locked Invite Bonus Indicator */}
-                {activeInviteBonusBalance > 0 && (
-                  <div className="bg-amber-500/10 border border-amber-500/35 rounded-xl px-3 py-2 flex items-center justify-between text-[11px]">
-                    <span className="text-amber-200 flex items-center gap-1.5 font-semibold">
-                      <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span>সক্রিয় ইনভাইট বোনাস ব্যালেন্স:</span>
-                    </span>
-                    <span className="font-mono font-black text-amber-300">
-                      ৳ {activeInviteBonusBalance.toLocaleString()}
-                    </span>
-                  </div>
-                )}
-
                 {/* Invited Friends Toggle & List */}
                 <button
                   type="button"
@@ -376,13 +397,6 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
               </button>
             )}
 
-            {/* Clear, friendly invite-bonus terms */}
-            <div className="mt-3 p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/30 flex items-start gap-2 text-[11px] text-cyan-100 leading-relaxed">
-              <Gift className="w-4 h-4 text-cyan-300 shrink-0 mt-0.5" />
-              <span>
-                <strong className="text-cyan-200">ইনভাইট বোনাস:</strong> আপনার বোনাস আলাদা Promotional Balance-এ যোগ হবে। এটি সরাসরি Cash-out করা যায় না; বোনাস দিয়ে করা গেম রাউন্ডে অতিরিক্ত নগদ জয়ের অর্থ যোগ হয় না।
-              </span>
-            </div>
           </div>
 
           {/* ================= CARD 2: 7-DAY STREAK (500 BDT) ================= */}

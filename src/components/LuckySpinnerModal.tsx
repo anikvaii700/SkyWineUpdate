@@ -6,6 +6,7 @@ import {
   WHEEL_SECTORS,
   WheelSector,
   executeLuckySpin,
+  executeGuestPreviewSpin,
   isSpinAvailable,
   loadBonusState,
   BonusState,
@@ -18,6 +19,7 @@ interface LuckySpinnerModalProps {
   onRewardWon: (amount: number, reason: string) => void;
   currentUser: AppUser | null;
   onOpenStreakHub?: () => void;
+  onRequireAuth: (message: string) => void;
 }
 
 export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
@@ -26,11 +28,13 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
   onRewardWon,
   currentUser,
   onOpenStreakHub,
+  onRequireAuth,
 }) => {
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotationDegree, setRotationDegree] = useState(0);
   const [wonSector, setWonSector] = useState<WheelSector | null>(null);
   const [wasNearMiss, setWasNearMiss] = useState(false);
+  const [isGuestPreview, setIsGuestPreview] = useState(false);
   const [hasSpunToday, setHasSpunToday] = useState(false);
   const [bonusState, setBonusState] = useState<BonusState>(() => loadBonusState(currentUser?.uid));
   const tickTimeoutsRef = useRef<number[]>([]);
@@ -43,6 +47,7 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
       setHasSpunToday(!isSpinAvailable(currentUser?.uid));
       setWonSector(null);
       setWasNearMiss(false);
+      setIsGuestPreview(false);
     }
   }, [isOpen, currentUser]);
 
@@ -122,9 +127,14 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
       currentTime += step;
     }
 
-    // Execute weighted spin calculation (rotates daily between 20, 30, 50, 100, 200 BDT)
-    const spinResult = executeLuckySpin(currentUser?.uid);
+    // Authenticated users receive the existing weighted reward spin. Guests get a
+    // value-free preview where every visible wheel sector, including the iPhone, can land.
+    const isGuestSpin = !currentUser;
+    const spinResult = currentUser
+      ? executeLuckySpin(currentUser.uid)
+      : executeGuestPreviewSpin();
     setBonusState(spinResult.state);
+    setIsGuestPreview(isGuestSpin);
     if (spinResult.nearMissIPhone) {
       setWasNearMiss(true);
     }
@@ -162,8 +172,10 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
       soundManager.playJackpot();
       triggerConfetti();
 
-      // Credit wallet
-      onRewardWon(spinResult.amount, 'ডেইলি লাকি স্পিনার বোনাস');
+      // Only authenticated users receive wallet credits. Guest results are demo-only.
+      if (!isGuestSpin) {
+        onRewardWon(spinResult.amount, 'ডেইলি লাকি স্পিনার বোনাস');
+      }
     }, 8000);
   };
 
@@ -192,11 +204,9 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
             <span>দৈনিক লাকি স্পিনার (Lucky Spin)</span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white drop-shadow-md leading-tight">
-            লাকি স্পিনার — স্পিন করুন!
+            <span className="block">স্পিনারে স্পিন করুন,</span>
+            <span className="block text-amber-300">iPhone 17 Pro Max জিতুন</span>
           </h2>
-          <p className="text-lg sm:text-xl font-black text-amber-300 mt-1.5">
-            iPhone 17 Pro Max-এর বিশেষ সেক্টর
-          </p>
         </div>
 
         {/* Wheel Canvas Section */}
@@ -331,24 +341,41 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
           </div>
         </div>
 
-        {/* Won Celebration Dialog */}
+        {/* Spin Result */}
         {wonSector && (
           <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-green-950/50 to-[#0e1622] border-2 border-emerald-500/60 text-center space-y-2 animate-fadeIn shadow-xl shadow-emerald-950/40 my-2">
-            {wasNearMiss && (
-              <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/60 text-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 animate-pulse">
-                <span>⚡ ইসস! অল্পের জন্য iPhone 17 Pro Max মিস হলো! কিন্তু জিতেছেন ৳{wonSector.amount}!</span>
-              </div>
+            {isGuestPreview ? (
+              <>
+                <div className="flex items-center justify-center gap-1.5 text-emerald-400 font-black text-sm">
+                  <Trophy className="w-4 h-4 text-amber-400" />
+                  <span>গেস্ট ডেমো স্পিনের ফলাফল</span>
+                </div>
+                <div className="text-2xl font-black text-amber-300 drop-shadow-md">
+                  {wonSector.isSpecial ? 'iPhone 17 Pro Max' : wonSector.label}
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  এটি শুধু ডেমো ফলাফল। এর কোনো আর্থিক বা পুরস্কারমূল্য নেই, ওয়ালেটে যোগ হবে না এবং একাউন্ট খুললেও পরে দাবি করা যাবে না।
+                </p>
+              </>
+            ) : (
+              <>
+                {wasNearMiss && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/60 text-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 animate-pulse">
+                    <span>⚡ ইসস! অল্পের জন্য iPhone 17 Pro Max মিস হলো! কিন্তু জিতেছেন ৳{wonSector.amount}!</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-center gap-1.5 text-emerald-400 font-black text-sm">
+                  <Trophy className="w-4 h-4 text-amber-400 animate-bounce" />
+                  <span>অভিনন্দন! আপনি জিতেছেন!</span>
+                </div>
+                <div className="text-3xl font-black font-mono text-emerald-300 drop-shadow-md">
+                  +৳{wonSector.amount}
+                </div>
+                <p className="text-xs text-slate-300">
+                  টাকাটি সফলভাবে আপনার একাউন্ট ওয়ালেটে যোগ করে দেওয়া হয়েছে।
+                </p>
+              </>
             )}
-            <div className="flex items-center justify-center gap-1.5 text-emerald-400 font-black text-sm">
-              <Trophy className="w-4 h-4 text-amber-400 animate-bounce" />
-              <span>অভিনন্দন! আপনি জিতেছেন!</span>
-            </div>
-            <div className="text-3xl font-black font-mono text-emerald-300 drop-shadow-md">
-              +৳{wonSector.amount}
-            </div>
-            <p className="text-xs text-slate-300">
-              টাকাটি সফলভাবে আপনার একাউন্ট ওয়ালেটে যোগ করে দেওয়া হয়েছে।
-            </p>
           </div>
         )}
 
@@ -363,6 +390,26 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
               <Sparkles className="w-4 h-4 text-slate-950 stroke-[2.5]" />
               <span>{isSpinning ? 'ভাগ্যের চাকা ঘুরছে...' : 'এখনই ফ্রি স্পিন করুন (SPIN NOW)'}</span>
             </button>
+          ) : !currentUser ? (
+            <div className="p-3 rounded-2xl bg-[#0e1420] border border-amber-500/30 text-center space-y-2">
+              <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-amber-300">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>আজকের গেস্ট ডেমো স্পিন সম্পন্ন হয়েছে!</span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                আসল দৈনিক স্পিনের জন্য ফ্রি একাউন্ট তৈরি করুন।
+              </p>
+              <button
+                onClick={() => {
+                  soundManager.playClick();
+                  onClose();
+                  onRequireAuth('আসল দৈনিক লাকি স্পিন ব্যবহার করতে প্রথমে একটি ফ্রি একাউন্ট তৈরি করুন বা লগইন করুন।');
+                }}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black transition-all cursor-pointer"
+              >
+                ফ্রি একাউন্ট তৈরি করুন
+              </button>
+            </div>
           ) : (
             <div className="p-3 rounded-2xl bg-[#0e1420] border border-[#233148] text-center space-y-1">
               <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-emerald-400">

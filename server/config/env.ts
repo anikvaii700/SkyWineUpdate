@@ -26,7 +26,7 @@ function parseList(raw: string | undefined): string[] {
 }
 
 function normalizeAdminPhone(raw: string): string {
-  let digits = raw.replace(/\\D/g, '');
+  let digits = raw.replace(/\D/g, '');
   if (digits.startsWith('880') && digits.length === 13) digits = '0' + digits.slice(3);
   return digits;
 }

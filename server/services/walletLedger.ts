@@ -188,8 +188,6 @@ function mapSettingsRow(row: Record<string, unknown>): PublicPaymentSettings {
 function isBootstrapAdmin(identity: VerifiedFirebaseIdentity): boolean {
   const phone = identity.phoneNumber ? normalizePhone(identity.phoneNumber) : '';
   if (phone && env.adminPhones.includes(phone)) return true;
-
-  // Keep verified email-based bootstrap admins available for existing deployments.
   if (!identity.email || !identity.emailVerified) return false;
   return env.adminEmails.includes(identity.email.toLowerCase());
 }
@@ -222,35 +220,36 @@ export async function recordAuditLog(
   );
 }
 
-/**
- * Ensures the authenticated Firebase user exists in PostgreSQL with an initialized 0.00 wallet.
- * Never accepts balance or role from client requests; only promotes bootstrap admin emails
- * configured in server-side ADMIN_EMAILS when email_verified is true.
- */
+/** Creates a zero-balance server wallet. Client payloads never set balance or role. */
 export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): Promise<DbUser> {
   return withTransaction(async (client) => {
     const existing = await client.query(
       `SELECT * FROM users WHERE firebase_uid = $1 FOR UPDATE`,
       [identity.uid]
     );
-
     const bootstrapAdmin = isBootstrapAdmin(identity);
 
     if (existing.rows.length > 0) {
       const current = mapUserRow(existing.rows[0]);
       const nextRole: UserRole = bootstrapAdmin ? 'admin' : current.role;
       const nextEmail = identity.email ?? current.email;
-      const nextName =
-        current.displayName && current.displayName !== 'Player'
-          ? current.displayName
-          : identity.name || 'Player';
+      const nextName = current.displayName && current.displayName !== 'Player'
+        ? current.displayName
+        : identity.name || 'Player';
+      const nextPhone = identity.phoneNumber ? normalizePhone(identity.phoneNumber) : current.phoneNumber;
 
-      if (nextRole !== current.role || nextEmail !== current.email || nextName !== current.displayName || nextPhone !== current.phoneNumber) {
+      if (
+        nextRole !== current.role ||
+        nextEmail !== current.email ||
+        nextName !== current.displayName ||
+        nextPhone !== current.phoneNumber
+      ) {
         const updated = await client.query(
           `UPDATE users
              SET role = $2,
                  email = $3,
                  display_name = $4,
+                 phone_number = $5,
                  updated_at = NOW()
            WHERE firebase_uid = $1
            RETURNING *`,
@@ -281,7 +280,7 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
              (firebase_uid, user_code, email, display_name, phone_number, role, referral_code)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING *`,
-          [identity.uid, code, identity.email, displayName, identity.phoneNumber, initialRole, code]
+          [identity.uid, code, identity.email, displayName, identity.phoneNumber ? normalizePhone(identity.phoneNumber) : null, initialRole, code]
         );
         await client.query(`INSERT INTO wallets (user_id) VALUES ($1)`, [identity.uid]);
         return mapUserRow(inserted.rows[0]);
@@ -291,7 +290,6 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
         throw err;
       }
     }
-
     throw new HttpError(500, 'USER_PROVISION_FAILED', 'Unable to allocate unique user code.');
   });
 }

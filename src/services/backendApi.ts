@@ -32,7 +32,7 @@ async function getAuthHeaders(requireAuth = true): Promise<Record<string, string
   return headers;
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\\/+$/, '');
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 function resolveApiUrl(path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;

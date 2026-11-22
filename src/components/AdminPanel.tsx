@@ -189,6 +189,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   initialTab,
 }) => {
   const [serverAdminVerified, setServerAdminVerified] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [pinInput, setPinInput] = useState<string>('');
+  const [pinError, setPinError] = useState<string>('');
+  const [showPin, setShowPin] = useState<boolean>(false);
+
+  const [activeTab, setActiveTab] = useState<AdminTabType>(initialTab || 'requests');
+  const [appControls, setAppControls] = useState<AppControlConfig>(getStoredAppControls);
+  const [isSavingControls, setIsSavingControls] = useState<boolean>(false);
+  const [allReferrals, setAllReferrals] = useState<ReferralRecord[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,15 +224,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const isAuthorized = serverAdminVerified && isUserAdminAccount(currentUserPhone);
 
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [pinInput, setPinInput] = useState<string>('');
-  const [pinError, setPinError] = useState<string>('');
-  const [showPin, setShowPin] = useState<boolean>(false);
 
-  const [activeTab, setActiveTab] = useState<AdminTabType>(initialTab || 'requests');
-  const [appControls, setAppControls] = useState<AppControlConfig>(getStoredAppControls);
-  const [isSavingControls, setIsSavingControls] = useState<boolean>(false);
-  const [allReferrals, setAllReferrals] = useState<ReferralRecord[]>([]);
 
   useEffect(() => {
     if (initialTab && isOpen && isAuthorized) {

@@ -1,5 +1,5 @@
 import { auth, type UserWalletProfile } from './firebase';
-import type { FirebaseUser } from 'firebase/auth';
+import type { User as FirebaseUser } from 'firebase/auth';
 
 export class ApiClientError extends Error {
   readonly status: number;

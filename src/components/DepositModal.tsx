@@ -82,7 +82,10 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   const [withdrawView, setWithdrawView] = useState<'form' | 'history'>('form');
 
   // Payment settings (Admin numbers) & Requests
-  const [paymentSettings, setPaymentSettings] = useState<SystemPaymentSettings>(getStoredPaymentSettings);\n  const [serverWallet, setServerWallet] = useState<{ balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } | null>(null);\n  const [serverMode, setServerMode] = useState<boolean>(Boolean(auth.currentUser));\n  const displayedBalance = serverMode && serverWallet ? serverWallet.balance : currentBalance;
+  const [paymentSettings, setPaymentSettings] = useState<SystemPaymentSettings>(getStoredPaymentSettings);
+  const [serverWallet, setServerWallet] = useState<{ balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } | null>(null);
+  const [serverMode, setServerMode] = useState<boolean>(Boolean(auth.currentUser));
+  const displayedBalance = serverMode && serverWallet ? serverWallet.balance : currentBalance;
   const [userRequests, setUserRequests] = useState<ManualDepositRequest[]>([]);
   const [userWithdrawals, setUserWithdrawals] = useState<ManualWithdrawalRequest[]>([]);
 

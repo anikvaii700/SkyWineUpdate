@@ -2205,6 +2205,7 @@ export default function App() {
         currentUser={currentUser}
         onRewardWon={handleRewardWon}
         onOpenStreakHub={handleOpenBonusHub}
+        onRequireAuth={handleRequireAuth}
       />
 
       {/* Phone Default Back Button & Double Back / Double Click Exit Confirmation Modal */}

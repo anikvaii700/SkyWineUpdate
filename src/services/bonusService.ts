@@ -339,6 +339,37 @@ export function executeLuckySpin(userId?: string): {
 }
 
 /**
+ * Execute a guest-only preview spin.
+ * Every visible sector may be selected, but this result has no monetary or prize value.
+ * The guest daily limit is tracked separately from any registered account.
+ */
+export function executeGuestPreviewSpin(): {
+  amount: 0;
+  sectorIndex: number;
+  sector: WheelSector;
+  state: BonusState;
+  nearMissIPhone: false;
+} {
+  const state = loadBonusState();
+  const today = getLocalDateString();
+  const sectorIndex = Math.floor(Math.random() * WHEEL_SECTORS.length);
+  const sector = WHEEL_SECTORS[sectorIndex];
+
+  state.lastSpinDate = today;
+  state.totalSpins = (state.totalSpins || 0) + 1;
+  state.lastWonAmount = null;
+  saveBonusState(state);
+
+  return {
+    amount: 0,
+    sectorIndex,
+    sector,
+    state,
+    nearMissIPhone: false,
+  };
+}
+
+/**
  * Format remaining seconds into MM:SS
  */
 export function formatTimeMMSS(seconds: number): string {

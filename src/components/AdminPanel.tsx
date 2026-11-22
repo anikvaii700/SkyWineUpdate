@@ -570,6 +570,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       saveActivePlayersSettings(activePlayersSettings);
       localStorage.setItem('aviator_marquee_text', marqueeNotice);
       window.dispatchEvent(new Event('marquee_text_updated'));
+      window.dispatchEvent(new Event('payment_settings_updated'));
       setSaveSuccessMsg('পেমেন্ট সেটিংস সার্ভারে সংরক্ষিত হয়েছে!');
       showAdminToast('সেটিংস সংরক্ষণ সফল', 'পেমেন্ট নম্বর ও সীমা সার্ভারে আপডেট হয়েছে।', 'success');
       reloadData();

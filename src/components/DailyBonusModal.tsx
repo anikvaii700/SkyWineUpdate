@@ -13,8 +13,6 @@ import {
   Copy,
   Check,
   Share2,
-  Lock,
-  AlertTriangle,
   Clock,
   UserPlus,
 } from 'lucide-react';
@@ -108,15 +106,15 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
             id: String(row.id),
             referrerUid: currentUser.uid,
             referrerCode: result.referralCode || userRefCode,
-            referredUid: row.referredUid || '',
-            referredUserCode: String(row.referredUserCode || ''),
-            referredPhone: String(row.referredPhone || ''),
-            referredName: String(row.referredName || 'Player'),
-            firstDepositAmount: Number(row.firstDepositAmount || 0),
-            bonusAmount: Number(row.bonusAmount || 0),
+            referredUid: row.referred_uid || '',
+            referredUserCode: String(row.referred_user_code || ''),
+            referredPhone: String(row.referred_phone || ''),
+            referredName: String(row.referred_name || 'Player'),
+            firstDepositAmount: Number(row.first_deposit_amount || 0),
+            bonusAmount: Number(row.bonus_amount || 0),
             status: row.status === 'rewarded' ? 'rewarded' : 'pending_deposit',
-            createdAt: String(row.createdAt || new Date().toISOString()),
-            rewardedAt: row.rewardedAt || undefined,
+            createdAt: String(row.created_at || new Date().toISOString()),
+            rewardedAt: row.rewarded_at || undefined,
           }));
           setReferrals(records);
         })

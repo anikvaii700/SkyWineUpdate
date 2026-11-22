@@ -74,6 +74,33 @@ import { Plane, LogOut, Ban, ShieldAlert } from 'lucide-react';
 
 const INITIAL_BALANCE = 0; // Starts at 0 for real authenticated accounts
 
+// Per-device practice/reward adjustment layered over the authoritative server wallet.
+// Server cash-out eligibility remains governed by the PostgreSQL wallet ledger.
+const LOCAL_WALLET_ADJUSTMENT_PREFIX = 'skywin_wallet_adjustment_v1_';
+
+function getLocalWalletAdjustment(uid?: string | null): number {
+  if (!uid || typeof localStorage === 'undefined') return 0;
+  try {
+    const raw = localStorage.getItem(`${LOCAL_WALLET_ADJUSTMENT_PREFIX}${uid}`);
+    const amount = raw === null ? 0 : Number(raw);
+    return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveLocalWalletAdjustment(uid: string | null | undefined, amount: number): void {
+  if (!uid || typeof localStorage === 'undefined') return;
+  try {
+    const rounded = Math.round(amount * 100) / 100;
+    const key = `${LOCAL_WALLET_ADJUSTMENT_PREFIX}${uid}`;
+    if (Math.abs(rounded) < 0.005) localStorage.removeItem(key);
+    else localStorage.setItem(key, String(rounded));
+  } catch (error) {
+    console.warn('Could not persist local practice wallet adjustment:', error);
+  }
+}
+
 export default function App() {
   const [balance, setBalance] = useState<number>(INITIAL_BALANCE);
   const [roundStatus, setRoundStatus] = useState<RoundStatus>('WAITING');
@@ -219,7 +246,12 @@ export default function App() {
 
   useEffect(() => {
     balanceRef.current = balance;
-  }, [balance]);
+    const uid = currentUser?.uid;
+    const serverBase = serverWalletBalanceRef.current;
+    if (uid && serverBase !== null) {
+      saveLocalWalletAdjustment(uid, balance - serverBase);
+    }
+  }, [balance, currentUser?.uid]);
 
   useEffect(() => {
     userProfileRef.current = userProfile;
@@ -444,8 +476,8 @@ export default function App() {
           };
           setCurrentUser(appUser);
           setUserProfile(profile);
-          setBalance(me.wallet.balance);
           serverWalletBalanceRef.current = me.wallet.balance;
+          setBalance(Math.max(0, Math.round((me.wallet.balance + getLocalWalletAdjustment(user.uid)) * 100) / 100));
         } catch (err) {
           console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
@@ -553,7 +585,7 @@ export default function App() {
             const previousServerBalance = serverWalletBalanceRef.current;
             if (previousServerBalance === null) {
               serverWalletBalanceRef.current = serverBalance;
-              setBalance(serverBalance);
+              setBalance(Math.max(0, Math.round((serverBalance + getLocalWalletAdjustment(currentUser.uid)) * 100) / 100));
             } else {
               const delta = Math.round((serverBalance - previousServerBalance) * 100) / 100;
               serverWalletBalanceRef.current = serverBalance;
@@ -704,7 +736,9 @@ export default function App() {
         const previousServerBalance = serverWalletBalanceRef.current;
         if (previousServerBalance === null) {
           serverWalletBalanceRef.current = serverBalance;
-          setBalance((current) => current === 0 ? serverBalance : current);
+          setBalance((current) => current === 0
+            ? Math.max(0, Math.round((serverBalance + getLocalWalletAdjustment(currentUser?.uid)) * 100) / 100)
+            : current);
         } else if (serverBalance !== previousServerBalance) {
           const serverDelta = Math.round((serverBalance - previousServerBalance) * 100) / 100;
           serverWalletBalanceRef.current = serverBalance;
@@ -733,8 +767,8 @@ export default function App() {
 
   // Sync balance updates with Firestore cloud wallet or Phone Account storage
   const updateBalanceAndSync = useCallback((updater: (prev: number) => number) => {
-    // Game-round balance remains a local practice display until bet/cashout endpoints exist.
-    // It never writes or mutates the authoritative PostgreSQL wallet.
+    // Keep one visible total for deposit + practice game + spinner/streak rewards.
+    // Practice adjustments persist on this device; server cash-out eligibility remains server-ledger based.
     setBalance((prev) => {
       const next = Math.max(0, Math.round(updater(prev) * 100) / 100);
       setUserProfile((profile) => (profile ? { ...profile, balance: next } : null));
@@ -2066,6 +2100,7 @@ export default function App() {
           setCurrentUser(null);
           setUserProfile(null);
           setBalance(INITIAL_BALANCE);
+          serverWalletBalanceRef.current = null;
           setAuthNoticeMessage(null);
         }}
         onResetBalance={() => {

@@ -376,11 +376,11 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
               </button>
             )}
 
-            {/* Mandatory Terms Notice (বি:দ্র:) */}
-            <div className="mt-3 p-2.5 rounded-xl bg-rose-950/35 border border-rose-500/35 flex items-start gap-2 text-[10.5px] text-rose-200/95 leading-snug">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            {/* Clear, friendly invite-bonus terms */}
+            <div className="mt-3 p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/30 flex items-start gap-2 text-[11px] text-cyan-100 leading-relaxed">
+              <Gift className="w-4 h-4 text-cyan-300 shrink-0 mt-0.5" />
               <span>
-                <strong className="text-rose-300">বি:দ্র:</strong> এই ইনভাইট বোনাসের টাকা সরাসরি উত্তোলন (উইথড্র) করা যাবে না এবং এই বোনাস টাকা দিয়ে গেম খেলে কখনই লাভবান হওয়া যাবে না।
+                <strong className="text-cyan-200">ইনভাইট বোনাস:</strong> আপনার বোনাস আলাদা Promotional Balance-এ যোগ হবে। এটি সরাসরি Cash-out করা যায় না; বোনাস দিয়ে করা গেম রাউন্ডে অতিরিক্ত নগদ জয়ের অর্থ যোগ হয় না।
               </span>
             </div>
           </div>

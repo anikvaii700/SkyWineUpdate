@@ -387,15 +387,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setBroadcastList(list);
       });
 
-      // Realtime listener for incoming deposit requests from other devices
-      const unsubDeposits = listenToDepositRequests((remoteRequests) => {
-        setRequests(remoteRequests);
-      });
-
-      // Realtime listener for incoming withdrawal requests from other devices
-      const unsubWithdrawals = listenToWithdrawalRequests((remoteWithdrawals) => {
-        setWithdrawals(remoteWithdrawals);
-      });
 
       // Realtime listener for App Controls (Game Control, Limits, Maintenance, Bonuses)
       const unsubControls = subscribeToAppControls((cfg) => {
@@ -406,15 +397,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const unsubReferrals = listenToAllReferralsForAdmin((refs) => {
         setAllReferrals(refs);
       });
-
-      let unsubUsers: (() => void) | null = null;
-      try {
-        unsubUsers = onSnapshot(collection(db, 'users'), () => {
-          syncUsersFromFirestore().then((u) => setAccountsWithStats(u));
-        });
-      } catch (err) {
-        console.warn('AdminPanel users onSnapshot error:', err);
-      }
 
       return () => {
         if (unsubUsers) unsubUsers();
@@ -672,118 +654,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleDirectCreditPhoneAccount = async (phone: string, amount: number) => {
     try {
       const cleanPhone = phone.replace(/[^0-9]/g, '');
-      const raw = localStorage.getItem('aviator_phone_accounts_v1');
-      let targetUid = `phone_${cleanPhone}`;
-      let newBalance = amount;
-      if (raw) {
-        const accounts = JSON.parse(raw);
-        if (accounts[cleanPhone] || accounts[phone]) {
-          const accKey = accounts[cleanPhone] ? cleanPhone : phone;
-          targetUid = accounts[accKey].uid || targetUid;
-          accounts[accKey].balance = (accounts[accKey].balance || 0) + amount;
-          accounts[accKey].totalDeposited = (accounts[accKey].totalDeposited || 0) + amount;
-          accounts[accKey].updatedAt = new Date().toISOString();
-          newBalance = accounts[accKey].balance;
-          localStorage.setItem('aviator_phone_accounts_v1', JSON.stringify(accounts));
-        }
+      const target = (accountsWithStats as unknown as Array<{ uid: string; phoneNumber: string; balance: number }>)
+        .find((account) => account.phoneNumber.replace(/[^0-9]/g, '') === cleanPhone);
+      if (!target) {
+        showAdminToast('ইউজার পাওয়া যায়নি', 'এই নম্বরের অ্যাকাউন্ট সার্ভার তালিকায় নেই।', 'error');
+        return;
       }
-
-      // Sync to Firestore user document
-      try {
-        await setDoc(
-          doc(db, 'users', targetUid),
-          {
-            balance: newBalance,
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-        if (cleanPhone && targetUid !== cleanPhone) {
-          await setDoc(
-            doc(db, 'users', cleanPhone),
-            {
-              balance: newBalance,
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          );
-        }
-      } catch (fsErr) {
-        console.warn('Error syncing manual balance credit to Firestore:', fsErr);
-      }
-
+      await backendApi.admin.adjustBalance(target.uid, {
+        direction: 'credit',
+        amount,
+        reason: 'Admin manual credit from Admin Panel',
+        idempotencyKey: `admin-credit-${target.uid}-${Date.now()}`,
+      });
       reloadData();
-      window.dispatchEvent(
-        new CustomEvent('balance_credited', {
-          detail: { userId: targetUid, phone: cleanPhone, amount },
-        })
-      );
       if (onBalanceAdjusted) onBalanceAdjusted();
-      showAdminToast(
-        'ব্যালেন্স যোগ সফল হয়েছে!',
-        `+88 ${cleanPhone} একাউন্টে ৳${amount.toLocaleString()} সফলভাবে যোগ করা হয়েছে।`,
-        'success'
-      );
+      showAdminToast('ব্যালেন্স যোগ সফল হয়েছে!', `+88 ${cleanPhone} একাউন্টে ৳${amount.toLocaleString()} যোগ হয়েছে।`, 'success');
     } catch (err) {
-      console.error(err);
+      showAdminToast('ব্যালেন্স যোগ ব্যর্থ', err instanceof Error ? err.message : 'সার্ভার অনুরোধ ব্যর্থ হয়েছে।', 'error');
     }
   };
 
-  // Handle Manual Reset Balance
   const handleDirectResetPhoneAccount = async (phone: string) => {
     try {
       const cleanPhone = phone.replace(/[^0-9]/g, '');
-      const raw = localStorage.getItem('aviator_phone_accounts_v1');
-      let targetUid = `phone_${cleanPhone}`;
-      if (raw) {
-        const accounts = JSON.parse(raw);
-        if (accounts[cleanPhone] || accounts[phone]) {
-          const accKey = accounts[cleanPhone] ? cleanPhone : phone;
-          targetUid = accounts[accKey].uid || targetUid;
-          accounts[accKey].balance = 0;
-          accounts[accKey].updatedAt = new Date().toISOString();
-          localStorage.setItem('aviator_phone_accounts_v1', JSON.stringify(accounts));
-        }
+      const target = (accountsWithStats as unknown as Array<{ uid: string; phoneNumber: string; balance: number }>)
+        .find((account) => account.phoneNumber.replace(/[^0-9]/g, '') === cleanPhone);
+      if (!target) {
+        showAdminToast('ইউজার পাওয়া যায়নি', 'এই নম্বরের অ্যাকাউন্ট সার্ভার তালিকায় নেই।', 'error');
+        return;
       }
-
-      // Sync reset to Firestore
-      try {
-        await setDoc(
-          doc(db, 'users', targetUid),
-          {
-            balance: 0,
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-        if (cleanPhone && targetUid !== cleanPhone) {
-          await setDoc(
-            doc(db, 'users', cleanPhone),
-            {
-              balance: 0,
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          );
-        }
-      } catch (fsErr) {
-        console.warn('Error syncing reset balance to Firestore:', fsErr);
+      const amount = Number(target.balance || 0);
+      if (amount > 0) {
+        await backendApi.admin.adjustBalance(target.uid, {
+          direction: 'debit',
+          amount,
+          reason: 'Admin reset wallet balance',
+          idempotencyKey: `admin-reset-${target.uid}-${Date.now()}`,
+        });
       }
-
       reloadData();
-      window.dispatchEvent(
-        new CustomEvent('balance_credited', {
-          detail: { userId: targetUid, phone: cleanPhone, amount: 0 },
-        })
-      );
       if (onBalanceAdjusted) onBalanceAdjusted();
-      showAdminToast(
-        'ব্যালেন্স রিসেট সম্পন্ন',
-        `+88 ${cleanPhone} একাউন্টের ব্যালেন্স ০ টাকা করা হয়েছে।`,
-        'info'
-      );
+      showAdminToast('ব্যালেন্স রিসেট সম্পন্ন', `+88 ${cleanPhone} একাউন্টের ব্যালেন্স ০ টাকা করা হয়েছে।`, 'info');
     } catch (err) {
-      console.error(err);
+      showAdminToast('ব্যালেন্স রিসেট ব্যর্থ', err instanceof Error ? err.message : 'সার্ভার অনুরোধ ব্যর্থ হয়েছে।', 'error');
     }
   };
 

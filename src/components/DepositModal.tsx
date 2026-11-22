@@ -119,9 +119,6 @@ export const DepositModal: React.FC<DepositModalProps> = ({
         const remoteSettings = configResult.paymentSettings as Partial<SystemPaymentSettings>;
         setPaymentSettings({ ...getStoredPaymentSettings(), ...remoteSettings } as SystemPaymentSettings);
         setServerWallet(meResult.wallet);
-        // Keep the app-level display synchronized with the server wallet snapshot.
-        onResetBalance();
-        if (meResult.wallet.balance > 0) onAddFunds(meResult.wallet.balance);
 
         const depositRows = ((depositResult as { deposits?: Array<Record<string, any>> }).deposits || []);
         const withdrawalRows = ((withdrawalResult as { withdrawals?: Array<Record<string, any>> }).withdrawals || []);
@@ -443,8 +440,6 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       }) as { withdrawal?: Record<string, any>; wallet?: { balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } };
       if (result.wallet) {
         setServerWallet(result.wallet);
-        onResetBalance();
-        if (result.wallet.balance > 0) onAddFunds(result.wallet.balance);
       }
       const row = result.withdrawal || {};
       setWithdrawSuccess({

@@ -12,9 +12,7 @@ function readFallbackFirebaseProjectId(): string {
     const configPath = path.join(ROOT_DIR, 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { projectId?: string };
-      if (parsed.projectId && parsed.projectId !== 'remixed-project-id') {
-        return parsed.projectId.trim();
-      }
+      if (parsed.projectId && parsed.projectId !== 'remixed-project-id') return parsed.projectId.trim();
     }
   } catch {
     // Ignore missing or unreadable applet config; env var takes precedence.
@@ -24,19 +22,16 @@ function readFallbackFirebaseProjectId(): string {
 
 function parseList(raw: string | undefined): string[] {
   if (!raw) return [];
-  return raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return raw.split(',').map((item) => item.trim()).filter(Boolean);
 }
-
-const rawPort = Number.parseInt(process.env.PORT || '3000', 10);
 
 function normalizeAdminPhone(raw: string): string {
   let digits = raw.replace(/\\D/g, '');
   if (digits.startsWith('880') && digits.length === 13) digits = '0' + digits.slice(3);
   return digits;
 }
+
+const rawPort = Number.parseInt(process.env.PORT || '3000', 10);
 
 export const env = {
   rootDir: ROOT_DIR,
@@ -46,5 +41,6 @@ export const env = {
   databaseUrl: (process.env.DATABASE_URL || '').trim(),
   firebaseProjectId: (process.env.FIREBASE_PROJECT_ID || readFallbackFirebaseProjectId()).trim(),
   allowedOrigins: parseList(process.env.ALLOWED_ORIGINS),
-  adminEmails: parseList(process.env.ADMIN_EMAILS).map((email) => email.toLowerCase()),\n  adminPhones: parseList(process.env.ADMIN_PHONES).map(normalizeAdminPhone).filter((phone) => /^01[0-9]{9}$/.test(phone)),
+  adminEmails: parseList(process.env.ADMIN_EMAILS).map((email) => email.toLowerCase()),
+  adminPhones: parseList(process.env.ADMIN_PHONES).map(normalizeAdminPhone).filter((phone) => /^01[0-9]{9}$/.test(phone)),
 } as const;

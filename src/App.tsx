@@ -473,7 +473,7 @@ export default function App() {
         try {
           const me = await backendApi.getMe();
           const profile = mapBackendMeToProfile(me, user);
-          const isPhoneAlias = /^user_01[0-9]{9}@phone\\.aviator\\.bd$/i.test(user.email || '');
+          const isPhoneAlias = /^user_01[0-9]{9}@phone\.aviator\.bd$/i.test(user.email || '');
           const appUser: AppUser = {
             uid: user.uid,
             userCode: me.user.userCode,

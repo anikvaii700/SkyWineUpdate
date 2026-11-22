@@ -441,32 +441,6 @@ export default function App() {
 
   // Listen to Firebase Auth or restore saved Phone session
   useEffect(() => {
-    // 1. Check if phone user session exists
-    const phoneSession = getActivePhoneSession();
-    if (phoneSession) {
-      setCurrentUser(phoneSession.user);
-      setUserProfile(phoneSession.profile);
-      setBalance(phoneSession.profile.balance);
-
-      // Immediately fetch from Firestore in background in case deposits were approved while app was closed
-      const cleanPhone = phoneSession.user.phoneNumber ? phoneSession.user.phoneNumber.replace(/[^0-9]/g, '') : '';
-      const uid = phoneSession.user.uid || `phone_${cleanPhone}`;
-      getDoc(doc(db, 'users', uid))
-        .then((snap) => {
-          if (snap.exists()) {
-            const d = snap.data();
-            if (d && typeof d.balance === 'number') {
-              const remoteBal = Math.max(0, Math.round(d.balance * 100) / 100);
-              setBalance(remoteBal);
-              setUserProfile((prev) => (prev ? { ...prev, ...d, balance: remoteBal } : (d as UserWalletProfile)));
-              updatePhoneAccountBalanceLocally(uid, remoteBal);
-              if (cleanPhone) updatePhoneAccountBalanceLocally(cleanPhone, remoteBal);
-            }
-          }
-        })
-        .catch(() => {});
-    }
-
     // Firebase Auth is the only login session source. Wallet/profile come from PostgreSQL.
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -621,115 +595,26 @@ export default function App() {
     };
   }, [currentUser]);
 
-  // Real-time Firestore listener for logged-in user wallet profile and balance
-  const prevRemoteBalanceRef = useRef<number | null>(null);
-  const prevRemoteInviteBonusRef = useRef<number | null>(null);
+  // Load public payment/support settings through the server API, never Firestore.
   useEffect(() => {
-    if (!currentUser) {
-      prevRemoteBalanceRef.current = null;
-      prevRemoteInviteBonusRef.current = null;
-      return;
-    }
-
-    const cleanPhone = currentUser.phoneNumber ? currentUser.phoneNumber.replace(/[^0-9]/g, '') : '';
-    const docId = currentUser.uid || (cleanPhone ? `phone_${cleanPhone}` : '');
-    if (!docId) return;
-
-    const userDocRef = doc(db, 'users', docId);
-    const unsubscribe = onSnapshot(
-      userDocRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data() as UserWalletProfile;
-          const newInviteBal = Math.max(0, Math.round((data.inviteBonusBalance || 0) * 100) / 100);
-          const inviteIncreased =
-            prevRemoteInviteBonusRef.current !== null && newInviteBal > prevRemoteInviteBonusRef.current;
-          const inviteDelta = inviteIncreased
-            ? Math.round((newInviteBal - (prevRemoteInviteBonusRef.current || 0)) * 100) / 100
-            : 0;
-
-          if (inviteIncreased && inviteDelta > 0) {
-            setUserAlertToast({
-              title: '🎁 ১০০% ইনভাইট বোনাস যুক্ত হয়েছে!',
-              message: `আপনার ইনভাইট করা বন্ধু প্রথম ডিপোজিট করায় ৳${inviteDelta.toLocaleString()} (১০০%) ইনভাইট বোনাস আপনার ব্যালেন্সে যোগ হয়েছে!`,
-              details: 'বি:দ্র: ইনভাইট বোনাসের টাকা উইথড্র করা যাবে না এবং এটি দিয়ে লাভবান হওয়া যাবে না।',
-              type: 'success',
-            });
-            soundManager.playWin();
-          }
-
-          prevRemoteInviteBonusRef.current = newInviteBal;
-          inviteBonusBalanceRef.current = newInviteBal;
-
-          if (typeof data.balance === 'number') {
-            const newBal = Math.max(0, Math.round(data.balance * 100) / 100);
-
-            // If balance increased remotely (e.g. admin approved deposit or refunded withdrawal)
-            if (prevRemoteBalanceRef.current !== null && newBal > prevRemoteBalanceRef.current) {
-              const credited = Math.round((newBal - prevRemoteBalanceRef.current) * 100) / 100;
-              if (!inviteIncreased || Math.abs(credited - inviteDelta) > 0.01) {
-                setBalanceUpdateNotice(
-                  `🎉 আপনার একাউন্টে ৳ ${credited.toLocaleString()} জমা হয়েছে! বর্তমান ব্যালেন্স: ৳ ${newBal.toLocaleString()}`
-                );
-                soundManager.playWin();
-              }
-            }
-
-            prevRemoteBalanceRef.current = newBal;
-            setBalance(newBal);
-            setUserProfile((prev) => (prev ? { ...prev, ...data, balance: newBal, inviteBonusBalance: newInviteBal } : { ...data, balance: newBal, inviteBonusBalance: newInviteBal }));
-
-            if (currentUser.provider === 'phone') {
-              updatePhoneAccountBalanceLocally(currentUser.uid, newBal);
-              if (cleanPhone) {
-                updatePhoneAccountBalanceLocally(cleanPhone, newBal);
-              }
-            }
-          }
-        }
-      },
-      (error) => {
-        console.warn('Realtime user profile listener error:', error);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [currentUser?.uid, currentUser?.phoneNumber]);
-
-  // Real-time Firestore listener for System Payment Settings (bKash/Nagad/Rocket numbers and notices)
-  useEffect(() => {
-    const settingsDocRef = doc(db, 'system', 'payment_settings');
-    const unsubscribe = onSnapshot(
-      settingsDocRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data) {
-            localStorage.setItem('aviator_payment_settings_v2', JSON.stringify(data));
-            setSystemSettings(data as SystemPaymentSettings);
-            window.dispatchEvent(new CustomEvent('payment_settings_updated', { detail: data }));
-          }
-        }
-      },
-      (err) => {
-        console.warn('Realtime payment settings listener error:', err);
-      }
-    );
-    return () => unsubscribe();
-  }, []);
-
-  // Real-time listener for local storage and in-app payment & telegram settings changes
-  useEffect(() => {
-    const handleSettingsUpdated = (e: Event) => {
-      const customEvent = e as CustomEvent<SystemPaymentSettings>;
-      if (customEvent.detail) {
-        setSystemSettings(customEvent.detail);
-      } else {
-        setSystemSettings(getStoredPaymentSettings());
+    let cancelled = false;
+    const refreshPublicSettings = async () => {
+      try {
+        const result = await backendApi.getPublicConfig();
+        if (cancelled) return;
+        const config = result.paymentSettings as Partial<SystemPaymentSettings>;
+        setSystemSettings((previous) => ({ ...previous, ...config }));
+      } catch (err) {
+        console.warn('Public payment settings could not be loaded:', err);
       }
     };
+    void refreshPublicSettings();
+    const handleSettingsUpdated = () => void refreshPublicSettings();
     window.addEventListener('payment_settings_updated', handleSettingsUpdated);
-    return () => window.removeEventListener('payment_settings_updated', handleSettingsUpdated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('payment_settings_updated', handleSettingsUpdated);
+    };
   }, []);
 
   // Poll the PostgreSQL ledger for approval/rejection notifications.
@@ -858,16 +743,6 @@ export default function App() {
   // Handle bonus rewards from Lucky Spinner, Daily Open Bonus & 7-Day Streak
   const handleRewardWon = useCallback((amount: number, reason: string) => {
     updateBalanceAndSync((prev) => prev + amount);
-    if (currentUser && currentUser.provider === 'google') {
-      recordWalletTransaction(currentUser.uid, {
-        type: 'deposit',
-        amount,
-        method: 'bkash',
-        accountNumber: 'SYSTEM_BONUS',
-        status: 'completed',
-        trxId: 'BNS' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      });
-    }
     setUserAlertToast({
       title: 'বোনাস ব্যালেন্সে যোগ হয়েছে!',
       message: `৳${amount} টাকা (${reason}) সফলভাবে আপনার একাউন্টে যোগ হয়েছে!`,
@@ -1269,9 +1144,6 @@ export default function App() {
       outcome: 'won',
     });
 
-    if (currentUser && currentUser.provider === 'google') {
-      recordBetHistory(currentUser.uid, 'aviator', currentBet.amount, mult, actualWin, 'won');
-    }
     setWinNotification({ amount: actualWin, multiplier: mult });
 
     setMyBetHistory((prev) => [
@@ -2136,29 +2008,9 @@ export default function App() {
         initialTab={walletTab}
         onAddFunds={(amt) => {
           updateBalanceAndSync((prev) => prev + amt);
-          if (currentUser && currentUser.provider === 'google') {
-            recordWalletTransaction(currentUser.uid, {
-              type: 'deposit',
-              amount: amt,
-              method: 'bkash',
-              accountNumber: userProfile?.phoneNumber || '01712-345678',
-              status: 'completed',
-              trxId: 'DEP' + Math.random().toString(36).substring(2, 9).toUpperCase(),
-            });
-          }
         }}
         onWithdrawFunds={(amt) => {
           updateBalanceAndSync((prev) => Math.max(0, Math.round((prev - amt) * 100) / 100));
-          if (currentUser && currentUser.provider === 'google') {
-            recordWalletTransaction(currentUser.uid, {
-              type: 'withdraw',
-              amount: amt,
-              method: 'bkash',
-              accountNumber: userProfile?.phoneNumber || '01712-345678',
-              status: 'completed',
-              trxId: 'WTH' + Math.random().toString(36).substring(2, 9).toUpperCase(),
-            });
-          }
         }}
         onResetBalance={() => {
           updateBalanceAndSync(() => INITIAL_BALANCE);
@@ -2213,12 +2065,10 @@ export default function App() {
         onClose={() => setIsAdminOpen(false)}
         initialTab={adminPanelInitialTab}
         onBalanceAdjusted={() => {
-          // If phone session exists, refresh state
-          const currentPhoneSession = getActivePhoneSession();
-          if (currentPhoneSession && currentUser?.uid === currentPhoneSession.user.uid) {
-            setBalance(currentPhoneSession.profile.balance);
-            setUserProfile(currentPhoneSession.profile);
-          }
+          if (!auth.currentUser) return;
+          void backendApi.getMe()
+            .then((me) => setUserProfile(mapBackendMeToProfile(me, auth.currentUser)))
+            .catch((err) => console.warn('Wallet profile refresh failed:', err));
         }}
       />
 

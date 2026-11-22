@@ -1,4 +1,5 @@
-import { UserWalletProfile, db } from './firebase';
+import { UserWalletProfile, db, signUpWithPhone, signInWithPhone, logoutUser } from './firebase';
+import { backendApi, mapBackendMeToProfile } from './backendApi';
 import { doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
 import { canRegisterNewAccountOnDevice, recordAccountRegistrationOnDevice } from './deviceSecurity';
 
@@ -226,401 +227,115 @@ export function saveStoredPhoneAccounts(accounts: Record<string, StoredPhoneAcco
 // Register a new mobile number account
 // Starts with ৳ 100 welcome bonus balance!
 // Supports referral code: referrer gets ৳ 50 bonus commission!
+async function getServerPhoneAccount(phone: string): Promise<{ user: AppUser; profile: UserWalletProfile }> {
+  const me = await backendApi.getMe();
+  const firebaseUser = (await import('./firebase')).auth.currentUser;
+  const profile = mapBackendMeToProfile(me, firebaseUser);
+  const user: AppUser = {
+    uid: me.user.uid,
+    userCode: me.user.userCode,
+    referralCode: me.user.referralCode,
+    displayName: me.user.displayName || `User ${phone}`,
+    email: me.user.email,
+    phoneNumber: me.user.phoneNumber || phone,
+    photoURL: firebaseUser?.photoURL || null,
+    provider: 'phone',
+    status: me.user.status as AppUser['status'],
+  };
+  return { user, profile };
+}
+
+// New phone accounts are authenticated by Firebase Auth, never by Local Storage passwords.
+// Wallet and role are provisioned and returned by the Express/PostgreSQL backend.
 export async function registerPhoneAccount(
   rawPhone: string,
   pass: string,
   fullName?: string,
   referralCodeInput?: string
 ): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string; referralBonusApplied?: boolean }> {
-  const { getStoredAppControls } = await import('./appControlService');
-  const appControls = getStoredAppControls();
-  if (!appControls.registrationEnabled) {
-    return {
-      success: false,
-      error: 'নতুন একাউন্ট রেজিস্ট্রেশন সাময়িকভাবে এডমিন কর্তৃক বন্ধ রাখা হয়েছে। কিছুক্ষণ পর চেষ্টা করুন।',
-    };
+  const { cleanPhone } = normalizePhoneNumber(rawPhone);
+  if (!/^01[0-9]{9}$/.test(cleanPhone)) {
+    return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
   }
-
-  const { cleanPhone, displayPhone } = normalizePhoneNumber(rawPhone);
-
-  if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
-    return {
-      success: false,
-      error: 'অনুগ্রহ করে সঠিক ১১ ডিজিটের বাংলাদেশী মোবাইল নাম্বার দিন (যেমন: 01712345678)',
-    };
-  }
-
   if (!pass || pass.length < 6) {
-    return {
-      success: false,
-      error: 'পাসওয়ার্ড বা গোপন পিন কমপক্ষে ৬ ডিজিটের হতে হবে',
-    };
+    return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
   }
 
-  // Strict Device Account Limit: Maximum 2 accounts per device
-  const deviceCheck = await canRegisterNewAccountOnDevice(cleanPhone);
-  if (!deviceCheck.allowed) {
-    return {
-      success: false,
-      error: deviceCheck.reason || 'একই ডিভাইসে ২ টির বেশি একাউন্ট খোলা যাবে না। এই ডিভাইস থেকে ইতিমধ্যে ২ টি একাউন্ট তৈরি করা হয়েছে।',
-    };
-  }
-
-  const accounts = getStoredPhoneAccounts();
-  const uid = `phone_${cleanPhone}`;
-
-  if (accounts[cleanPhone]) {
-    return {
-      success: false,
-      error: 'এই মোবাইল নাম্বার দিয়ে ইতোমধ্যে অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
-    };
-  }
-
-  // Also check Firestore to ensure no account exists on cloud
   try {
-    const remoteDoc = await getDoc(doc(db, 'users', uid));
-    if (remoteDoc.exists()) {
-      return {
-        success: false,
-        error: 'এই মোবাইল নাম্বার দিয়ে ইতোমধ্যে অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
-      };
+    const { getStoredAppControls } = await import('./appControlService');
+    if (!getStoredAppControls().registrationEnabled) {
+      return { success: false, error: 'নতুন অ্যাকাউন্ট রেজিস্ট্রেশন সাময়িকভাবে বন্ধ আছে।' };
     }
-  } catch (checkErr) {
-    console.warn('Could not check remote user existence:', checkErr);
-  }
 
-  const now = new Date().toISOString();
-  const displayName = fullName?.trim() || `User ${displayPhone}`;
-  const userCode = generateUniqueUserCode(accounts);
+    // Keep the device registration limit, but do not store credentials locally.
+    const deviceCheck = await canRegisterNewAccountOnDevice(cleanPhone);
+    if (!deviceCheck.allowed) {
+      return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
+    }
 
-  // New account receives admin-configured starting welcome balance (default ৳ 100)
-  const initialWelcomeBalance = Math.max(0, Math.round(Number(appControls.signupBonusAmount ?? 100)));
-
-  // Check and link referral code if provided (cross-device Firestore + localStorage lookup)
-  // 100% Invite Bonus Rule: Referrer receives 100% of this invited user's first deposit when approved!
-  let referralBonusApplied = false;
-  let referrerCode: string | undefined = undefined;
-  let referrerUid: string | undefined = undefined;
-
-  if (referralCodeInput && referralCodeInput.trim().length >= 3) {
+    await signUpWithPhone(cleanPhone, pass, fullName);
+    if (referralCodeInput?.trim()) {
+      await backendApi.updateProfile({ referralCode: referralCodeInput.trim() });
+    }
+    const account = await getServerPhoneAccount(cleanPhone);
+    await recordAccountRegistrationOnDevice(cleanPhone);
     try {
-      const { findReferrerByCode, registerReferralLinkage, clearPendingReferralCode } = await import('./referralService');
-      const matchedReferrer = await findReferrerByCode(referralCodeInput, uid, cleanPhone);
-      if (matchedReferrer) {
-        referrerCode = matchedReferrer.userCode;
-        referrerUid = matchedReferrer.uid;
-        await registerReferralLinkage({
-          referrerUid: matchedReferrer.uid,
-          referrerCode: matchedReferrer.userCode,
-          referredUid: uid,
-          referredUserCode: userCode,
-          referredPhone: cleanPhone,
-          referredName: displayName,
-        });
-        clearPendingReferralCode();
-        referralBonusApplied = true;
-      }
-    } catch (refErr) {
-      console.warn('Referral linkage check failed:', refErr);
+      localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
+      localStorage.removeItem(STORAGE_SESSION_KEY);
+    } catch {}
+    return { success: true, ...account, referralBonusApplied: false };
+  } catch (err) {
+    const code = (err as { code?: string })?.code || '';
+    if (code === 'auth/email-already-in-use') {
+      return { success: false, error: 'এই মোবাইল নম্বরে অ্যাকাউন্ট আগে থেকেই আছে। লগইন করুন।' };
     }
+    if (code === 'auth/weak-password') {
+      return { success: false, error: 'পাসওয়ার্ড আরও শক্তিশালী করুন।' };
+    }
+    return { success: false, error: err instanceof Error ? err.message : 'অ্যাকাউন্ট তৈরি করা যায়নি।' };
   }
-
-  // Reload accounts in case registerReferralLinkage updated referrer's referralCount locally
-  const latestAccounts = getStoredPhoneAccounts();
-
-  const newAccount: StoredPhoneAccount = {
-    uid,
-    userCode,
-    phoneNumber: cleanPhone,
-    password: pass,
-    displayName,
-    balance: initialWelcomeBalance, // ৳ 100 starting balance
-    initialBonus: initialWelcomeBalance,
-    lockedPrincipal: initialWelcomeBalance,
-    totalDeposited: 0,
-    referralCode: userCode,
-    referredBy: referrerCode,
-    referredByUid: referrerUid,
-    referralCount: 0,
-    referralBonusEarned: 0,
-    inviteBonusBalance: 0,
-    firstDepositReferralRewarded: false,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  latestAccounts[cleanPhone] = newAccount;
-  saveStoredPhoneAccounts(latestAccounts);
-
-  // Sync account to Firestore users collection for online cloud access
-  try {
-    const userDocRef = doc(db, 'users', uid);
-    await setDoc(userDocRef, {
-      id: uid,
-      uid,
-      userCode,
-      phoneNumber: cleanPhone,
-      password: pass,
-      displayName,
-      balance: initialWelcomeBalance,
-      initialBonus: initialWelcomeBalance,
-      lockedPrincipal: initialWelcomeBalance,
-      totalDeposited: 0,
-      referralCode: userCode,
-      referredBy: referrerCode || '',
-      referredByUid: referrerUid || '',
-      referralCount: 0,
-      referralBonusEarned: 0,
-      inviteBonusBalance: 0,
-      firstDepositReferralRewarded: false,
-      provider: 'phone',
-      createdAt: now,
-      updatedAt: now,
-    });
-  } catch (fsErr) {
-    console.warn('Failed to dispatch Firestore account save:', fsErr);
-  }
-
-  // Set active session
-  try {
-    localStorage.setItem(STORAGE_SESSION_KEY, cleanPhone);
-  } catch {}
-
-  const user: AppUser = {
-    uid,
-    userCode,
-    displayName,
-    email: `${cleanPhone}@aviator.phone`,
-    phoneNumber: cleanPhone,
-    photoURL: null,
-    provider: 'phone',
-  };
-
-  const profile: UserWalletProfile = {
-    id: uid,
-    userCode,
-    displayName,
-    email: '',
-    phoneNumber: cleanPhone,
-    balance: initialWelcomeBalance,
-    initialBonus: initialWelcomeBalance,
-    lockedPrincipal: initialWelcomeBalance, // Welcome bonus cannot be cashed out directly
-    totalDeposited: 0,
-    firstDepositBonusEarned: 0,
-    hasDeposited: false,
-    referralCode: userCode,
-    referredBy: referrerCode,
-    referredByUid: referrerUid,
-    referralCount: 0,
-    referralBonusEarned: 0,
-    inviteBonusBalance: 0,
-    firstDepositReferralRewarded: false,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  // Record this account as registered on this device
-  await recordAccountRegistrationOnDevice(cleanPhone);
-
-  return { success: true, user, profile, referralBonusApplied };
 }
 
-// Login with mobile number and password/PIN (Supports Firestore cloud check)
+// Phone login is a Firebase Auth sign-in. The server creates/loads the account and
+// applies ADMIN_PHONES authorization only after verifying the Firebase ID token.
 export async function loginPhoneAccount(
   rawPhone: string,
   pass: string
 ): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  const accounts = getStoredPhoneAccounts();
-  let account = accounts[cleanPhone];
-  const uid = `phone_${cleanPhone}`;
-
-  // If account not found in local storage or to fetch latest online data, check Firestore
-  if (!account) {
+  if (!/^01[0-9]{9}$/.test(cleanPhone)) {
+    return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
+  }
+  try {
+    await signInWithPhone(cleanPhone, pass);
+    const account = await getServerPhoneAccount(cleanPhone);
     try {
-      const snap = await getDoc(doc(db, 'users', uid));
-      if (snap.exists()) {
-        const d = snap.data();
-        if (d && d.password) {
-          account = {
-            uid,
-            userCode: d.userCode || `USER-${cleanPhone.slice(-5)}`,
-            phoneNumber: d.phoneNumber || cleanPhone,
-            password: d.password,
-            displayName: d.displayName || `User ${cleanPhone}`,
-            balance: typeof d.balance === 'number' ? d.balance : 100,
-            initialBonus: typeof d.initialBonus === 'number' ? d.initialBonus : 100,
-            lockedPrincipal: typeof d.lockedPrincipal === 'number' ? d.lockedPrincipal : 0,
-            totalDeposited: typeof d.totalDeposited === 'number' ? d.totalDeposited : 0,
-            referralCode: d.referralCode || d.userCode || `USER-${cleanPhone.slice(-5)}`,
-            referredBy: d.referredBy || undefined,
-            referredByUid: d.referredByUid || undefined,
-            referralCount: d.referralCount || 0,
-            referralBonusEarned: d.referralBonusEarned || 0,
-            inviteBonusBalance: typeof d.inviteBonusBalance === 'number' ? d.inviteBonusBalance : (d.referralBonusEarned || 0),
-            firstDepositReferralRewarded: Boolean(d.firstDepositReferralRewarded),
-            createdAt: d.createdAt || new Date().toISOString(),
-            updatedAt: d.updatedAt || new Date().toISOString(),
-          };
-          accounts[cleanPhone] = account;
-          saveStoredPhoneAccounts(accounts);
-        }
-      }
-    } catch (fsErr) {
-      console.warn('Could not check Firestore user for login:', fsErr);
+      localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
+      localStorage.removeItem(STORAGE_SESSION_KEY);
+    } catch {}
+    return { success: true, ...account };
+  } catch (err) {
+    const code = (err as { code?: string })?.code || '';
+    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+      return { success: false, error: 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।' };
     }
+    return { success: false, error: err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।' };
   }
-
-  if (!account) {
-    return {
-      success: false,
-      error: 'এই মোবাইল নাম্বারে কোনো অ্যাকাউন্ট পাওয়া যায়নি। অনুগ্রহ করে সাইনআপ করুন।',
-    };
-  }
-
-  if (account.password !== pass) {
-    return {
-      success: false,
-      error: 'ভুল পাসওয়ার্ড বা পিন! অনুগ্রহ করে পুনরায় চেষ্টা করুন।',
-    };
-  }
-
-  // Fetch latest balance & invite bonus data from Firestore if online
-  try {
-    const snap = await getDoc(doc(db, 'users', account.uid));
-    if (snap.exists()) {
-      const d = snap.data();
-      if (d && typeof d.balance === 'number') {
-        account.balance = d.balance;
-        if (typeof d.lockedPrincipal === 'number') account.lockedPrincipal = d.lockedPrincipal;
-        if (typeof d.totalDeposited === 'number') account.totalDeposited = d.totalDeposited;
-        if (typeof d.referralCount === 'number') account.referralCount = d.referralCount;
-        if (typeof d.referralBonusEarned === 'number') account.referralBonusEarned = d.referralBonusEarned;
-        if (typeof d.inviteBonusBalance === 'number') account.inviteBonusBalance = d.inviteBonusBalance;
-        if (typeof d.firstDepositBonusEarned === 'number') account.firstDepositBonusEarned = d.firstDepositBonusEarned;
-        if (d.hasDeposited !== undefined) account.hasDeposited = Boolean(d.hasDeposited);
-        accounts[cleanPhone] = account;
-        saveStoredPhoneAccounts(accounts);
-      }
-    }
-  } catch {}
-
-  // Check if account is suspended or banned
-  const suspension = checkAccountSuspensionStatus(account);
-  if (suspension.isDeactivated) {
-    if (suspension.isBanned) {
-      return {
-        success: false,
-        error: `🚫 অ্যাকাউন্টটি স্থায়ীভাবে ডিঅ্যাক্টিভ (Banned)। কারণ: ${suspension.reason}`,
-      };
-    } else if (suspension.isSuspended) {
-      const untilStr = new Date(suspension.suspendedUntil!).toLocaleString('bn-BD');
-      return {
-        success: false,
-        error: `⏳ অ্যাকাউন্টটি সাময়িকভাবে ডিঅ্যাক্টিভ আছে (${untilStr} পর্যন্ত)। কারণ: ${suspension.reason}`,
-      };
-    }
-  }
-
-  // Set active session
-  try {
-    localStorage.setItem(STORAGE_SESSION_KEY, cleanPhone);
-  } catch {}
-
-  const user: AppUser = {
-    uid: account.uid,
-    userCode: account.userCode,
-    displayName: account.displayName,
-    email: `${account.phoneNumber}@aviator.phone`,
-    phoneNumber: account.phoneNumber,
-    photoURL: null,
-    provider: 'phone',
-  };
-
-  const profile: UserWalletProfile = {
-    id: account.uid,
-    userCode: account.userCode,
-    displayName: account.displayName,
-    email: '',
-    phoneNumber: account.phoneNumber,
-    balance: account.balance,
-    initialBonus: account.initialBonus || 100,
-    lockedPrincipal: account.lockedPrincipal !== undefined ? account.lockedPrincipal : account.balance,
-    totalDeposited: account.totalDeposited || 0,
-    referralCode: account.referralCode || account.userCode,
-    referredBy: account.referredBy,
-    referredByUid: account.referredByUid,
-    referralCount: account.referralCount || 0,
-    referralBonusEarned: account.referralBonusEarned || 0,
-    inviteBonusBalance: account.inviteBonusBalance !== undefined ? account.inviteBonusBalance : (account.referralBonusEarned || 0),
-    firstDepositReferralRewarded: Boolean(account.firstDepositReferralRewarded),
-    firstDepositBonusEarned: account.firstDepositBonusEarned || 0,
-    hasDeposited: Boolean(account.hasDeposited || (account.totalDeposited && account.totalDeposited > 0)),
-    createdAt: account.createdAt,
-    updatedAt: account.updatedAt,
-  };
-
-  return { success: true, user, profile };
 }
 
 // Get currently active phone session on app load
 export function getActivePhoneSession(): { user: AppUser; profile: UserWalletProfile } | null {
-  try {
-    const activePhone = localStorage.getItem(STORAGE_SESSION_KEY);
-    if (!activePhone) return null;
-    const accounts = getStoredPhoneAccounts();
-    const account = accounts[activePhone];
-    if (!account) return null;
-
-    return {
-      user: {
-        uid: account.uid,
-        userCode: account.userCode,
-        displayName: account.displayName,
-        email: `${account.phoneNumber}@aviator.phone`,
-        phoneNumber: account.phoneNumber,
-        photoURL: null,
-        provider: 'phone',
-        status: account.status || 'active',
-        suspendedUntil: account.suspendedUntil,
-        deactivationReason: account.deactivationReason,
-      },
-      profile: {
-        id: account.uid,
-        userCode: account.userCode,
-        displayName: account.displayName,
-        email: '',
-        phoneNumber: account.phoneNumber,
-        balance: account.balance,
-        initialBonus: account.initialBonus || 100,
-        lockedPrincipal: account.lockedPrincipal !== undefined ? account.lockedPrincipal : account.balance,
-        totalDeposited: account.totalDeposited || 0,
-        firstDepositBonusEarned: account.firstDepositBonusEarned || 0,
-        hasDeposited: Boolean(account.hasDeposited || (account.totalDeposited && account.totalDeposited > 0)),
-        referralCode: account.referralCode || account.userCode,
-        referredBy: account.referredBy,
-        referredByUid: account.referredByUid,
-        referralCount: account.referralCount || 0,
-        referralBonusEarned: account.referralBonusEarned || 0,
-        inviteBonusBalance: account.inviteBonusBalance !== undefined ? account.inviteBonusBalance : (account.referralBonusEarned || 0),
-        firstDepositReferralRewarded: Boolean(account.firstDepositReferralRewarded),
-        status: account.status || 'active',
-        suspendedUntil: account.suspendedUntil,
-        deactivationReason: account.deactivationReason,
-        createdAt: account.createdAt,
-        updatedAt: account.updatedAt,
-      },
-    };
-  } catch {
-    return null;
-  }
+  // Phone sessions now come from Firebase Auth persistence, never browser Local Storage.
+  return null;
 }
 
 // Logout phone user
 export function logoutPhoneSession(): void {
   try {
     localStorage.removeItem(STORAGE_SESSION_KEY);
+    localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
   } catch {}
+  void logoutUser().catch(() => {});
 }
 
 // Sync phone account balance to local storage and Firestore

@@ -557,7 +557,7 @@ export default function App() {
         setUserAlertToast({
           title: '🎁 ১০০% ইনভাইট বোনাস যুক্ত হয়েছে!',
           message: `আপনার ইনভাইট করা বন্ধু (${detail.depositorName || 'বন্ধু'}) প্রথম ডিপোজিট করায় ৳${amt.toLocaleString()} (১০০%) ইনভাইট বোনাস পেয়েছেন!`,
-          details: 'বি:দ্র: ইনভাইট বোনাসের টাকা উইথড্র করা যাবে না এবং এটি দিয়ে লাভবান হওয়া যাবে না।',
+          details: 'ইনভাইট বোনাস আলাদা Promotional Balance-এ জমা হয়। এটি সরাসরি Cash-out করা যায় না; বোনাস-ভিত্তিক গেম রাউন্ডে অতিরিক্ত নগদ জয়ের অর্থ যোগ হয় না।',
           type: 'success',
         });
       }

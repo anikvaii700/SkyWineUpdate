@@ -22,7 +22,8 @@ import {
 import { soundManager } from '../services/audio';
 import { Language, translations } from '../utils/i18n';
 import { AppUser, getActivePhoneSession, getStoredPhoneAccounts } from '../services/phoneAuth';
-import { UserWalletProfile } from '../services/firebase';
+import { UserWalletProfile, auth } from '../services/firebase';
+import { backendApi } from '../services/backendApi';
 import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../services/userManagement';
 import {
   SystemPaymentSettings,
@@ -81,7 +82,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   const [withdrawView, setWithdrawView] = useState<'form' | 'history'>('form');
 
   // Payment settings (Admin numbers) & Requests
-  const [paymentSettings, setPaymentSettings] = useState<SystemPaymentSettings>(getStoredPaymentSettings);
+  const [paymentSettings, setPaymentSettings] = useState<SystemPaymentSettings>(getStoredPaymentSettings);\n  const [serverWallet, setServerWallet] = useState<{ balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } | null>(null);\n  const [serverMode, setServerMode] = useState<boolean>(Boolean(auth.currentUser));\n  const displayedBalance = serverMode && serverWallet ? serverWallet.balance : currentBalance;
   const [userRequests, setUserRequests] = useState<ManualDepositRequest[]>([]);
   const [userWithdrawals, setUserWithdrawals] = useState<ManualWithdrawalRequest[]>([]);
 
@@ -100,27 +101,65 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
   const t = translations[lang];
 
-  // Refresh settings & user requests (both deposits and withdrawals)
-  const loadData = () => {
+  const loadData = async () => {
+    const firebaseUser = auth.currentUser;
+    setServerMode(Boolean(firebaseUser));
+
+    if (firebaseUser) {
+      try {
+        const [configResult, meResult, depositResult, withdrawalResult] = await Promise.all([
+          backendApi.getPublicConfig(),
+          backendApi.getMe(),
+          backendApi.listMyDeposits(100, 0),
+          backendApi.listMyWithdrawals(100, 0),
+        ]);
+        const remoteSettings = configResult.paymentSettings as Partial<SystemPaymentSettings>;
+        setPaymentSettings({ ...getStoredPaymentSettings(), ...remoteSettings } as SystemPaymentSettings);
+        setServerWallet(meResult.wallet);
+        // Keep the app-level display synchronized with the server wallet snapshot.
+        onResetBalance();
+        if (meResult.wallet.balance > 0) onAddFunds(meResult.wallet.balance);
+
+        const depositRows = ((depositResult as { deposits?: Array<Record<string, any>> }).deposits || []);
+        const withdrawalRows = ((withdrawalResult as { withdrawals?: Array<Record<string, any>> }).withdrawals || []);
+        setUserRequests(depositRows.map((row) => ({
+          id: String(row.id), userId: firebaseUser.uid, userCode: userProfile?.userCode || '',
+          userIdentifier: currentUser?.displayName || currentUser?.phoneNumber || '',
+          method: row.method, targetNumber: String(row.target_number || ''), senderNumber: String(row.sender_number || ''),
+          trxId: String(row.trx_id || ''), amount: Number(row.amount || 0), status: row.status,
+          createdAt: String(row.created_at || ''), updatedAt: String(row.updated_at || ''),
+          rejectionReason: row.rejection_reason || undefined, adminNote: row.admin_note || undefined,
+          isFirstDeposit: Boolean(row.is_first_deposit), bonusPercent: Number(row.bonus_percent || 0),
+          bonusAmount: Number(row.bonus_amount || 0), totalCredited: Number(row.total_credited || 0),
+        })));
+        setUserWithdrawals(withdrawalRows.map((row) => ({
+          id: String(row.id), userId: firebaseUser.uid, userCode: userProfile?.userCode || '',
+          userIdentifier: currentUser?.displayName || currentUser?.phoneNumber || '',
+          method: row.method, personalNumber: String(row.personal_number || ''),
+          amount: Number(row.amount || 0), status: row.status,
+          createdAt: String(row.created_at || ''), updatedAt: String(row.updated_at || ''),
+          adminNote: row.admin_note || undefined, rejectionReason: row.rejection_reason || undefined,
+        })));
+        return;
+      } catch (err) {
+        console.error('Could not load wallet from backend:', err);
+        setSubmissionError('সার্ভার থেকে ওয়ালেট ডাটা পাওয়া যায়নি। আবার চেষ্টা করুন।');
+        return;
+      }
+    }
+
+    // Legacy fallback for a pre-migration session only.
     setPaymentSettings(getStoredPaymentSettings());
     const allDeposits = getStoredDepositRequests();
     const allWithdrawals = getStoredWithdrawalRequests();
     const uid = currentUser?.uid;
     const phone = currentUser?.phoneNumber || userPhone;
-
-    const myDeposits = allDeposits.filter((r) => {
-      if (uid && r.userId === uid) return true;
-      if (phone && (r.senderNumber === phone || r.userIdentifier.includes(phone))) return true;
-      return false;
-    });
-    setUserRequests(myDeposits);
-
-    const myWithdrawals = allWithdrawals.filter((r) => {
-      if (uid && r.userId === uid) return true;
-      if (phone && (r.personalNumber === phone || r.userIdentifier.includes(phone))) return true;
-      return false;
-    });
-    setUserWithdrawals(myWithdrawals);
+    setUserRequests(allDeposits.filter((r) =>
+      Boolean((uid && r.userId === uid) || (phone && (r.senderNumber === phone || r.userIdentifier.includes(phone))))
+    ));
+    setUserWithdrawals(allWithdrawals.filter((r) =>
+      Boolean((uid && r.userId === uid) || (phone && (r.personalNumber === phone || r.userIdentifier.includes(phone))))
+    ));
   };
 
   useEffect(() => {
@@ -147,7 +186,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   }, [isOpen, currentUser, userPhone]);
 
   useEffect(() => {
-    const handleSettingsUpdated = () => setPaymentSettings(getStoredPaymentSettings());
+    const handleSettingsUpdated = () => { void loadData(); };
     const handleRequestsUpdated = () => loadData();
     const handleWithdrawalsUpdated = () => loadData();
 
@@ -164,9 +203,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
   useEffect(() => {
     if (activeTab === 'withdraw') {
-      setWithdrawAmount((prev) => (currentBalance <= 0 ? 0 : Math.min(prev || 500, currentBalance)));
+      setWithdrawAmount((prev) => (displayedBalance <= 0 ? 0 : Math.min(prev || 500, displayedBalance)));
     }
-  }, [currentBalance, activeTab]);
+  }, [displayedBalance, activeTab]);
 
   if (!isOpen) return null;
 
@@ -258,7 +297,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
     const activeInviteBonus = inviteBonusBal !== undefined ? inviteBonusBal : refBonus;
 
-    const totalLockedBonuses = calculateTotalLockedBonuses({
+    const totalLockedBonuses = serverWallet?.inviteBonusLocked ?? calculateTotalLockedBonuses({
       initialBonus,
       referralBonusEarned: refBonus,
       inviteBonusBalance: activeInviteBonus,
@@ -267,7 +306,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       lockedPrincipal: explicitLocked,
     });
 
-    const withdrawableAmount = calculateWithdrawableBalance(currentBalance, totalLockedBonuses, hasDeposited, totalDeposited);
+    const withdrawableAmount = serverWallet?.withdrawableBalance ??
+      calculateWithdrawableBalance(displayedBalance, totalLockedBonuses, hasDeposited, totalDeposited);
 
     return {
       initialBonus,
@@ -284,197 +324,150 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
   const bonusInfo = getUserBonusBreakdown();
 
-  // Handle manual deposit request submission
   const handleSubmitDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmissionError('');
 
     if (!isDepositActive) {
-      setSubmissionError('এই সার্ভিসটি সাময়িক সময়ের জন্য বন্ধ আছে। অনুগ্রহ করে সচল থাকা অন্য মেথড ব্যবহার করুন।');
+      setSubmissionError('এই সার্ভিসটি সাময়িক সময়ের জন্য বন্ধ আছে।');
       soundManager.playCrash();
       return;
     }
-
-    if (!currentUser) {
-      setSubmissionError('এড মানি করতে হলে প্রথমে একাউন্ট তৈরি বা লগইন করতে হবে।');
+    if (!currentUser || !auth.currentUser) {
+      setSubmissionError('ডিপোজিট করতে Firebase লগইন প্রয়োজন। আবার লগইন করুন।');
       soundManager.playCrash();
       return;
     }
 
     const appControls = getStoredAppControls();
     if (!appControls.depositsEnabled) {
-      setSubmissionError('ডিপোজিট সার্ভিসটি এডমিন কর্তৃক সাময়িকভাবে বন্ধ রাখা হয়েছে। কিছুক্ষণ পর চেষ্টা করুন।');
+      setSubmissionError('ডিপোজিট সার্ভিসটি এডমিন কর্তৃক সাময়িকভাবে বন্ধ রাখা হয়েছে।');
       soundManager.playCrash();
       return;
     }
-
-    const minDep = Math.max(10, appControls.minDepositAmount || 100);
-    const maxDep = Math.max(minDep, appControls.maxDepositAmount || 50000);
-    if (!depositAmount || depositAmount < minDep) {
-      setSubmissionError(`নূন্যতম ডিপোজিটের পরিমাণ ৳ ${minDep.toLocaleString()}`);
-      soundManager.playCrash();
-      return;
-    }
-    if (depositAmount > maxDep) {
-      setSubmissionError(`সর্বোচ্চ ডিপোজিটের পরিমাণ ৳ ${maxDep.toLocaleString()}`);
-      soundManager.playCrash();
-      return;
-    }
-
     const cleanSender = senderPhone.replace(/[^0-9]/g, '');
-    if (cleanSender.length < 11) {
-      setSubmissionError('অনুগ্রহ করে সঠিক ১১ ডিজিটের প্রেরক নম্বর দিন (যেমন: 017xxxxxxxx)');
+    if (cleanSender.length !== 11) {
+      setSubmissionError('সঠিক ১১ ডিজিটের প্রেরক নম্বর দিন।');
       soundManager.playCrash();
       return;
     }
-
     const cleanTrx = trxId.trim();
-    if (!cleanTrx || cleanTrx.length < 5) {
-      setSubmissionError('অনুগ্রহ করে সঠিক ট্রানজেকশন আইডি (TrxID) লিখুন');
+    if (cleanTrx.length < 5) {
+      setSubmissionError('সঠিক ট্রানজেকশন আইডি (TrxID) লিখুন।');
       soundManager.playCrash();
       return;
     }
 
     setIsSubmitting(true);
     soundManager.playClick();
-
-    const userCode = userProfile?.userCode || currentUser?.userCode || '';
-    const cleanUserPhone = currentUser?.phoneNumber ? currentUser.phoneNumber.replace(/[^0-9]/g, '') : cleanSender;
-    const userId = currentUser?.uid || `phone_${cleanUserPhone}`;
-    const userIdentifier = currentUser?.displayName || currentUser?.phoneNumber || cleanSender;
-
-    const res = await submitManualDepositRequest({
-      userId,
-      userCode,
-      userIdentifier,
-      method: selectedMethod,
-      targetNumber: currentGateway.number,
-      senderNumber: cleanSender,
-      trxId: cleanTrx,
-      amount: depositAmount,
-    });
-
-    setIsSubmitting(false);
-
-    if (res.success && res.request) {
-      soundManager.playWin();
-      setSubmissionSuccess(res.request);
+    try {
+      const result = await backendApi.submitDeposit({
+        method: selectedMethod,
+        senderNumber: cleanSender,
+        trxId: cleanTrx,
+        amount: depositAmount,
+      }) as { deposit?: Record<string, any> };
+      const row = result.deposit || {};
+      const request: ManualDepositRequest = {
+        id: String(row.id), userId: auth.currentUser.uid,
+        userCode: userProfile?.userCode || currentUser.userCode || '',
+        userIdentifier: currentUser.displayName || currentUser.phoneNumber || '',
+        method: row.method || selectedMethod, targetNumber: String(row.target_number || currentGateway.number),
+        senderNumber: String(row.sender_number || cleanSender), trxId: String(row.trx_id || cleanTrx),
+        amount: Number(row.amount || depositAmount), status: row.status || 'pending',
+        createdAt: String(row.created_at || new Date().toISOString()),
+        updatedAt: String(row.updated_at || new Date().toISOString()),
+      };
+      setSubmissionSuccess(request);
       setTrxId('');
-      loadData();
-    } else {
-      setSubmissionError(res.error || 'ডিপোজিট রিকোয়েস্ট পাঠাতে ব্যর্থ হয়েছে');
+      soundManager.playWin();
+      await loadData();
+    } catch (err) {
+      const code = (err as { code?: string }).code || '';
+      const messages: Record<string, string> = {
+        DUPLICATE_TRX_ID: 'এই TrxID আগে জমা দেওয়া হয়েছে।',
+        CONFLICT: 'এই TrxID আগে জমা দেওয়া হয়েছে।',
+        AMOUNT_OUT_OF_RANGE: 'ডিপোজিটের পরিমাণ অনুমোদিত সীমার বাইরে।',
+        GATEWAY_DISABLED: 'এই পেমেন্ট মেথডটি এখন বন্ধ আছে।',
+        TOO_MANY_PENDING_DEPOSITS: 'আপনার একাধিক Pending ডিপোজিট আছে। আগে সেগুলো সম্পন্ন হতে দিন।',
+        RATE_LIMITED: 'অনেকবার চেষ্টা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।',
+        NOT_SIGNED_IN: 'সেশন শেষ হয়েছে। আবার লগইন করুন।',
+      };
+      setSubmissionError(messages[code] || (err instanceof Error ? err.message : 'ডিপোজিট রিকোয়েস্ট পাঠানো যায়নি।'));
       soundManager.playCrash();
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // Handle Withdraw request submission
-  // Rules (Updated per user instruction):
-  // 1. Min cashout = 500 BDT
-  // 2. Cash-in (deposits) CAN be cashed out!
-  // 3. ONLY referral commission received (রেফার কমিশন) cannot be directly cashed out
   const handleSubmitWithdrawal = async (e: React.FormEvent) => {
     e.preventDefault();
     setWithdrawError('');
     setWithdrawSuccess(null);
-
     if (!isWithdrawActive) {
-      setWithdrawError('এই সার্ভিসটি সাময়িক সময়ের জন্য বন্ধ আছে। অনুগ্রহ করে সচল থাকা অন্য মেথড নির্বাচন করুন।');
+      setWithdrawError('উত্তোলন সার্ভিসটি সাময়িকভাবে বন্ধ আছে।');
+      soundManager.playCrash();
+      return;
+    }
+    if (!currentUser || !auth.currentUser) {
+      setWithdrawError('উইথড্র করতে Firebase লগইন প্রয়োজন।');
       soundManager.playCrash();
       return;
     }
 
-    if (!currentUser) {
-      setWithdrawError('উইথড্র করতে হলে প্রথমে একাউন্ট তৈরি বা লগইন করতে হবে।');
+    const minWth = Math.max(50, Number(getStoredAppControls().minWithdrawAmount || 500));
+    const maxWth = Math.max(minWth, Number(getStoredAppControls().maxWithdrawAmount || 50000));
+    if (!withdrawAmount || withdrawAmount < minWth || withdrawAmount > maxWth) {
+      setWithdrawError(`উত্তোলনের পরিমাণ ৳${minWth.toLocaleString()} থেকে ৳${maxWth.toLocaleString()} এর মধ্যে হতে হবে।`);
       soundManager.playCrash();
       return;
     }
-
-    // Calculate all locked bonuses (welcome, first deposit bonus %, referral commissions, rewards)
-    const { totalLockedBonuses, withdrawableAmount, hasDeposited } = getUserBonusBreakdown();
-
-    // ১। ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ ব্লক: ভবিষ্যতে যাতে কোনো ডিপোজিট ছাড়া কেউ উইথড্র রিকোয়েস্টই সাবমিট করতে না পারে
-    if (!hasDeposited) {
-      setWithdrawError('🚫 ডিপোজিট ছাড়া উইথড্র সম্পূর্ণ বন্ধ! উইথড্র করার জন্য আপনার একাউন্টে নূন্যতম ১ বার সফল ডিপোজিট করা বাধ্যতামূলক।');
-      soundManager.playCrash();
-      return;
-    }
-
-    const appControls = getStoredAppControls();
-    if (!appControls.withdrawalsEnabled) {
-      setWithdrawError('উত্তোলন সার্ভিসটি এডমিন কর্তৃক সাময়িকভাবে বন্ধ রাখা হয়েছে। কিছুক্ষণ পর চেষ্টা করুন।');
-      soundManager.playCrash();
-      return;
-    }
-
-    const minWth = Math.max(50, appControls.minWithdrawAmount || 500);
-    const maxWth = Math.max(minWth, appControls.maxWithdrawAmount || 50000);
-
-    if (!withdrawAmount || withdrawAmount < minWth) {
-      setWithdrawError(`ক্যাশআউট মিনিমাম ৳ ${minWth.toLocaleString()} টাকা হতে হবে।`);
-      soundManager.playCrash();
-      return;
-    }
-
-    if (withdrawAmount > maxWth) {
-      setWithdrawError(`একবারে সর্বোচ্চ উত্তোলন সীমা ৳ ${maxWth.toLocaleString()} টাকা।`);
-      soundManager.playCrash();
-      return;
-    }
-
-    if (withdrawableAmount < minWth) {
-      setWithdrawError(
-        `বোনাস ও কমিশন ব্যালেন্স (৳${totalLockedBonuses.toLocaleString()}) উত্তোলনযোগ্য নয়, শুধুমাত্র গেম খেলে উইন হওয়া টাকা উত্তোলন করতে পারবেন। আপনার বর্তমান উত্তোলনযোগ্য ব্যালেন্স ৳ ${withdrawableAmount.toLocaleString()}।`
-      );
-      soundManager.playCrash();
-      return;
-    }
-
-    if (withdrawAmount > withdrawableAmount) {
-      setWithdrawError(
-        `বোনাস/কমিশন বাদে শুধুমাত্র গেম খেলে উইন হওয়া টাকা এবং একাউন্টে ১০০ টাকা ব্যালেন্স রেখে উইথড্র করতে পারবেন। আপনার সর্বোচ্চ উত্তোলনযোগ্য ব্যালেন্স: ৳ ${withdrawableAmount.toLocaleString()}`
-      );
-      soundManager.playCrash();
-      return;
-    }
-
     const cleanPhone = withdrawPhone.replace(/[^0-9]/g, '');
-    if (cleanPhone.length < 11) {
-      setWithdrawError('অনুগ্রহ করে সঠিক ১১ ডিজিটের পার্সোনাল নম্বর লিখুন (যেমন: 017xxxxxxxx)');
+    if (cleanPhone.length !== 11) {
+      setWithdrawError('সঠিক ১১ ডিজিটের পার্সোনাল নম্বর লিখুন।');
       soundManager.playCrash();
       return;
     }
 
     setIsWithdrawSubmitting(true);
     soundManager.playClick();
-
-    const userCode = userProfile?.userCode || currentUser?.userCode || '';
-    const cleanUserPhone = currentUser?.phoneNumber ? currentUser.phoneNumber.replace(/[^0-9]/g, '') : cleanPhone;
-    const userId = currentUser?.uid || `phone_${cleanUserPhone}`;
-    const userIdentifier = currentUser?.displayName || currentUser?.phoneNumber || cleanPhone;
-
-    // Deduct balance
-    onWithdrawFunds(withdrawAmount);
-
-    const res = await submitManualWithdrawalRequest({
-      userId,
-      userCode,
-      userIdentifier,
-      method: selectedWithdrawMethod,
-      personalNumber: cleanPhone,
-      amount: withdrawAmount,
-    });
-
-    setIsWithdrawSubmitting(false);
-
-    if (res.success && res.request) {
+    try {
+      const result = await backendApi.submitWithdrawal({
+        method: selectedWithdrawMethod,
+        personalNumber: cleanPhone,
+        amount: withdrawAmount,
+        idempotencyKey: `wth-${auth.currentUser.uid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      }) as { withdrawal?: Record<string, any>; wallet?: { balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } };
+      if (result.wallet) {
+        setServerWallet(result.wallet);
+        onResetBalance();
+        if (result.wallet.balance > 0) onAddFunds(result.wallet.balance);
+      }
+      const row = result.withdrawal || {};
+      setWithdrawSuccess({
+        id: String(row.id), userId: auth.currentUser.uid,
+        userCode: userProfile?.userCode || currentUser.userCode || '',
+        userIdentifier: currentUser.displayName || currentUser.phoneNumber || '',
+        method: row.method || selectedWithdrawMethod, personalNumber: String(row.personal_number || cleanPhone),
+        amount: Number(row.amount || withdrawAmount), status: row.status || 'pending',
+        createdAt: String(row.created_at || new Date().toISOString()),
+        updatedAt: String(row.updated_at || new Date().toISOString()),
+      });
       soundManager.playWin();
-      setWithdrawSuccess(res.request);
-      loadData();
-    } else {
-      // Refund if error
-      onAddFunds(withdrawAmount);
-      setWithdrawError(res.error || 'উত্তোলন রিকোয়েস্ট পাঠাতে ব্যর্থ হয়েছে');
+      await loadData();
+    } catch (err) {
+      const code = (err as { code?: string }).code || '';
+      const messages: Record<string, string> = {
+        INSUFFICIENT_BALANCE: 'আপনার উত্তোলনযোগ্য ব্যালেন্স যথেষ্ট নয়।',
+        AMOUNT_OUT_OF_RANGE: 'উত্তোলনের পরিমাণ অনুমোদিত সীমার বাইরে।',
+        TOO_MANY_PENDING_WITHDRAWALS: 'আপনার আগে থেকেই Pending উত্তোলন আছে।',
+        ACCOUNT_RESTRICTED: 'আপনার অ্যাকাউন্ট সাময়িকভাবে সীমাবদ্ধ।',
+        RATE_LIMITED: 'অনেকবার চেষ্টা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।',
+      };
+      setWithdrawError(messages[code] || (err instanceof Error ? err.message : 'উত্তোলন রিকোয়েস্ট পাঠানো যায়নি।'));
       soundManager.playCrash();
+    } finally {
+      setIsWithdrawSubmitting(false);
     }
   };
 
@@ -559,8 +552,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
                 বর্তমান ব্যালেন্স (Current Balance)
               </span>
-              <div className={`text-xl sm:text-2xl font-black font-mono-numbers tracking-tight ${currentBalance <= 0 ? 'text-amber-400' : 'text-[#38bdf8]'}`}>
-                ৳ {currentBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <div className={`text-xl sm:text-2xl font-black font-mono-numbers tracking-tight ${displayedBalance <= 0 ? 'text-amber-400' : 'text-[#38bdf8]'}`}>
+                ৳ {displayedBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
           </div>
@@ -1108,7 +1101,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
               </div>
 
               <span className="text-[11px] text-slate-400">
-                ব্যালেন্স: <strong className="text-white font-mono">৳{currentBalance.toLocaleString()}</strong>
+                ব্যালেন্স: <strong className="text-white font-mono">৳{displayedBalance.toLocaleString()}</strong>
               </span>
             </div>
 

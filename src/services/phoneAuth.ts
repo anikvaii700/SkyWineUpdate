@@ -12,6 +12,8 @@ export interface AppUser {
   phoneNumber: string | null;
   photoURL: string | null;
   provider: 'google' | 'phone';
+  /** Server-verified PostgreSQL role returned by /api/me. */
+  isAdmin?: boolean;
   status?: 'active' | 'suspended' | 'banned';
   suspendedUntil?: string | null;
   deactivationReason?: string | null;
@@ -240,6 +242,7 @@ async function getServerPhoneAccount(phone: string): Promise<{ user: AppUser; pr
     phoneNumber: me.user.phoneNumber || phone,
     photoURL: firebaseUser?.photoURL || null,
     provider: 'phone',
+    isAdmin: me.user.isAdmin === true,
     status: me.user.status as AppUser['status'],
   };
   return { user, profile };

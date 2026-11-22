@@ -18,7 +18,6 @@ import { WingoGame } from './components/WingoGame';
 import { AuthModal } from './components/AuthModal';
 import { AdminPanel } from './components/AdminPanel';
 import { AdminNotificationBanner } from './components/AdminNotificationBanner';
-import { isUserAdminAccount } from './services/adminAuth';
 import { UserBalanceAlertToast, UserAlertToastData } from './components/UserBalanceAlertToast';
 import { LuckySpinnerModal } from './components/LuckySpinnerModal';
 import { DailyBonusModal } from './components/DailyBonusModal';
@@ -439,6 +438,7 @@ export default function App() {
             phoneNumber: me.user.phoneNumber || user.phoneNumber || null,
             photoURL: user.photoURL,
             provider: isPhoneAlias ? 'phone' : 'google',
+            isAdmin: me.user.isAdmin === true,
             status: me.user.status as AppUser['status'],
           };
           setCurrentUser(appUser);
@@ -509,7 +509,7 @@ export default function App() {
     };
 
     const updatePendingCount = () => {
-      if (!isUserAdminAccount(currentUser?.phoneNumber)) {
+      if (currentUser?.isAdmin !== true) {
         setPendingDepositCount(0);
         return;
       }
@@ -1709,13 +1709,13 @@ export default function App() {
   }, []);
 
   const handleOpenAdminPanelWithTab = (tab?: 'requests' | 'withdrawals') => {
-    if (!isUserAdminAccount(currentUser?.phoneNumber)) return;
+    if (currentUser?.isAdmin !== true) return;
     if (tab) setAdminPanelInitialTab(tab);
     setIsAdminOpen(true);
   };
 
   useEffect(() => {
-    if (!isUserAdminAccount(currentUser?.phoneNumber) && isAdminOpen) {
+    if (currentUser?.isAdmin !== true && isAdminOpen) {
       setIsAdminOpen(false);
     }
   }, [currentUser?.phoneNumber, isAdminOpen]);
@@ -1756,7 +1756,7 @@ export default function App() {
 
       {/* Real-time Admin Notification Banner for Add Money & Cashout requests */}
       <AdminNotificationBanner
-        currentUserPhone={currentUser?.phoneNumber}
+        currentUserIsAdmin={currentUser?.isAdmin === true}
         onOpenAdminPanel={handleOpenAdminPanelWithTab}
       />
 
@@ -1785,7 +1785,7 @@ export default function App() {
           onOpenWithdraw={handleOpenWithdraw}
           onOpenRules={() => setIsRulesOpen(true)}
           onOpenAdmin={() => {
-            if (isUserAdminAccount(currentUser?.phoneNumber)) {
+            if (currentUser?.isAdmin === true) {
               setIsAdminOpen(true);
             }
           }}
@@ -1810,7 +1810,7 @@ export default function App() {
         <MarqueeTicker />
 
         {/* Admin Maintenance Active Indicator (Only visible to Admin when Maintenance Mode is ON) */}
-        {appControls.maintenanceMode && isUserAdminAccount(currentUser?.phoneNumber) && (
+        {appControls.maintenanceMode && currentUser?.isAdmin === true && (
           <div className="bg-rose-950/80 border-b border-rose-500/50 px-3 py-1.5 flex items-center justify-between text-[11px] text-rose-200 font-bold">
             <span className="flex items-center gap-1.5">
               <ShieldAlert className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
@@ -2039,8 +2039,7 @@ export default function App() {
       />
 
       <AdminPanel
-        isOpen={isAdminOpen && isUserAdminAccount(currentUser?.phoneNumber)}
-        currentUserPhone={currentUser?.phoneNumber}
+        isOpen={isAdminOpen && currentUser?.isAdmin === true}
         onClose={() => setIsAdminOpen(false)}
         initialTab={adminPanelInitialTab}
         onBalanceAdjusted={() => {
@@ -2081,7 +2080,7 @@ export default function App() {
         onOpenWithdraw={handleOpenWithdraw}
         onOpenRules={() => setIsRulesOpen(true)}
         onOpenAdmin={() => {
-          if (isUserAdminAccount(currentUser?.phoneNumber)) {
+          if (currentUser?.isAdmin === true) {
             setIsAdminOpen(true);
           }
         }}
@@ -2183,7 +2182,7 @@ export default function App() {
       )}
 
       {/* System Maintenance Mode Overlay (Admin account bypasses this screen) */}
-      {Boolean(appControls.maintenanceMode && !isUserAdminAccount(currentUser?.phoneNumber)) && (
+      {Boolean(appControls.maintenanceMode && currentUser?.isAdmin !== true) && (
         <div className="fixed inset-0 z-[145] flex items-center justify-center bg-[#070a12]/96 backdrop-blur-md p-4 animate-fadeIn">
           <div className="bg-[#101726] border-2 border-amber-500/50 rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl text-center space-y-4">
             <div className="w-16 h-16 rounded-full bg-amber-500/15 border-2 border-amber-500/50 text-amber-400 mx-auto flex items-center justify-center shadow-lg">

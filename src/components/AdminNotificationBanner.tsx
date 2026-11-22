@@ -16,10 +16,9 @@ import {
   listenToDepositRequests,
   listenToWithdrawalRequests,
 } from '../services/manualPayment';
-import { isPublicAdminVisible, isUserAdminAccount } from '../services/adminAuth';
 
 interface AdminNotificationBannerProps {
-  currentUserPhone?: string | null;
+  currentUserIsAdmin?: boolean;
   onOpenAdminPanel: (targetTab?: 'requests' | 'withdrawals') => void;
 }
 
@@ -38,7 +37,7 @@ const STORAGE_LAST_SEEN_DEPOSIT_KEY = 'aviator_admin_last_seen_deposit_ts';
 const STORAGE_LAST_SEEN_WITHDRAWAL_KEY = 'aviator_admin_last_seen_withdrawal_ts';
 
 export const AdminNotificationBanner: React.FC<AdminNotificationBannerProps> = ({
-  currentUserPhone,
+  currentUserIsAdmin = false,
   onOpenAdminPanel,
 }) => {
   const [activeAlert, setActiveAlert] = useState<AlertNotification | null>(null);
@@ -46,7 +45,7 @@ export const AdminNotificationBanner: React.FC<AdminNotificationBannerProps> = (
   const isInitialLoadRef = useRef(true);
 
   // STRICT REQUIREMENT: Only the account holder of 01743224700 can receive admin notifications or sounds
-  const isAdmin = isUserAdminAccount(currentUserPhone);
+  const isAdmin = currentUserIsAdmin;
 
   const [pendingDepositCount, setPendingDepositCount] = useState<number>(0);
   const [pendingWithdrawalCount, setPendingWithdrawalCount] = useState<number>(0);

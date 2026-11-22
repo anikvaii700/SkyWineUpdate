@@ -4,7 +4,6 @@ import { translations, Language } from '../utils/i18n';
 import { UserWalletProfile } from '../services/firebase';
 import { AppUser } from '../services/phoneAuth';
 import { soundManager } from '../services/audio';
-import { isUserAdminAccount } from '../services/adminAuth';
 
 interface HeaderProps {
   balance: number;
@@ -44,7 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
   // STRICT: Only allowed if logged in as 01743224700. For everyone else, zero hint or access.
   const logoClicksRef = useRef<number>(0);
   const lastClickTimeRef = useRef<number>(0);
-  const isAdmin = isUserAdminAccount(currentUser?.phoneNumber);
+  const isAdmin = currentUser?.isAdmin === true;
 
   const handleLogoClick = (e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault();

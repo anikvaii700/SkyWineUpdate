@@ -123,6 +123,22 @@ export function mapBackendMeToProfile(
   };
 }
 
+export interface BackendReferralSummary {
+  referralCode: string;
+  referrals: Array<{
+    id: string;
+    status: 'pending' | 'rewarded';
+    bonus_amount: number;
+    created_at: string;
+    rewarded_at: string | null;
+    referred_uid: string;
+    referred_user_code: string;
+    referred_name: string;
+    referred_phone: string;
+    first_deposit_amount: number;
+  }>;
+}
+
 export const backendApi = {
   getHealth: () =>
     apiRequest<{
@@ -166,7 +182,7 @@ export const backendApi = {
     idempotencyKey?: string;
   }) => apiRequest('/api/withdrawals', { method: 'POST', body: payload }),
 
-  getMyReferrals: () => apiRequest('/api/referrals'),
+  getMyReferrals: () => apiRequest<BackendReferralSummary>('/api/referrals'),
 
   admin: {
     getOverview: () => apiRequest('/api/admin/overview'),

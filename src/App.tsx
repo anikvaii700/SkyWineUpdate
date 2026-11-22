@@ -474,10 +474,16 @@ export default function App() {
             isAdmin: me.user.isAdmin === true,
             status: me.user.status as AppUser['status'],
           };
+          const restoredBalance = Math.max(
+            0,
+            Math.round((me.wallet.balance + getLocalWalletAdjustment(user.uid)) * 100) / 100
+          );
+          currentUserRef.current = appUser;
+          serverWalletBalanceRef.current = me.wallet.balance;
+          balanceRef.current = restoredBalance;
           setCurrentUser(appUser);
           setUserProfile(profile);
-          serverWalletBalanceRef.current = me.wallet.balance;
-          setBalance(Math.max(0, Math.round((me.wallet.balance + getLocalWalletAdjustment(user.uid)) * 100) / 100));
+          setBalance(restoredBalance);
         } catch (err) {
           console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
@@ -767,13 +773,19 @@ export default function App() {
 
   // Sync balance updates with Firestore cloud wallet or Phone Account storage
   const updateBalanceAndSync = useCallback((updater: (prev: number) => number) => {
-    // Keep one visible total for deposit + practice game + spinner/streak rewards.
-    // Practice adjustments persist on this device; server cash-out eligibility remains server-ledger based.
-    setBalance((prev) => {
-      const next = Math.max(0, Math.round(updater(prev) * 100) / 100);
-      setUserProfile((profile) => (profile ? { ...profile, balance: next } : null));
-      return next;
-    });
+    // Persist practice rewards synchronously before updating React state. This prevents
+    // an app/service-worker reload from losing a just-earned spinner or game reward.
+    const next = Math.max(0, Math.round(updater(balanceRef.current) * 100) / 100);
+    balanceRef.current = next;
+
+    const uid = currentUserRef.current?.uid;
+    const serverBase = serverWalletBalanceRef.current;
+    if (uid && serverBase !== null) {
+      saveLocalWalletAdjustment(uid, next - serverBase);
+    }
+
+    setBalance(next);
+    setUserProfile((profile) => (profile ? { ...profile, balance: next } : null));
   }, []);
 
   const adjustInviteBonusBalance = useCallback((delta: number, lockedDelta: number = 0) => {
@@ -2090,11 +2102,17 @@ export default function App() {
         userProfile={userProfile}
         noticeMessage={authNoticeMessage}
         onLoginSuccess={(user, profile) => {
+          currentUserRef.current = user;
           setCurrentUser(user);
           setUserProfile(profile);
           const serverBase = profile.balance || 0;
           if (auth.currentUser) serverWalletBalanceRef.current = serverBase;
-          setBalance(Math.max(0, Math.round((serverBase + getLocalWalletAdjustment(user.uid)) * 100) / 100));
+          const restoredBalance = Math.max(
+            0,
+            Math.round((serverBase + getLocalWalletAdjustment(user.uid)) * 100) / 100
+          );
+          balanceRef.current = restoredBalance;
+          setBalance(restoredBalance);
           setAuthNoticeMessage(null);
         }}
         onLogoutSuccess={() => {

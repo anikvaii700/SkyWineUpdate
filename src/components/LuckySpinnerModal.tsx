@@ -191,11 +191,11 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
             <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
             <span>দৈনিক লাকি স্পিনার (Lucky Spin)</span>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-md leading-tight">
-            iPhone 17 Pro Max
+          <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white drop-shadow-md leading-tight">
+            লাকি স্পিনার — স্পিন করুন!
           </h2>
-          <p className="text-sm sm:text-base font-extrabold text-amber-300 mt-1">
-            চাকার বিশেষ আকর্ষণ — স্পিন করুন!
+          <p className="text-lg sm:text-xl font-black text-amber-300 mt-1.5">
+            iPhone 17 Pro Max-এর বিশেষ সেক্টর
           </p>
         </div>
 

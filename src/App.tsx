@@ -212,6 +212,7 @@ export default function App() {
   }, [bet2]);
 
   const balanceRef = useRef(balance);
+  const serverWalletBalanceRef = useRef<number | null>(null);
   const userProfileRef = useRef(userProfile);
   const currentUserRef = useRef(currentUser);
   const inviteBonusBalanceRef = useRef<number>(0);
@@ -443,18 +444,21 @@ export default function App() {
           };
           setCurrentUser(appUser);
           setUserProfile(profile);
-          setBalance(INITIAL_BALANCE);
+          setBalance(me.wallet.balance);
+          serverWalletBalanceRef.current = me.wallet.balance;
         } catch (err) {
           console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
           setUserProfile(null);
           setBalance(0);
+          serverWalletBalanceRef.current = null;
           setAuthNoticeMessage('সার্ভারের সাথে সংযোগ হয়নি। কিছুক্ষণ পর আবার লগইন করুন।');
         }
       } else {
         setCurrentUser(null);
         setUserProfile(null);
         setBalance(0);
+        serverWalletBalanceRef.current = null;
       }
     });
 
@@ -540,24 +544,46 @@ export default function App() {
       if (isMatch) {
         soundManager.playWin();
         const amt = Math.round(detail.bonusAmount * 100) / 100;
-        const nextInvite = Math.round((inviteBonusBalanceRef.current + amt) * 100) / 100;
-        inviteBonusBalanceRef.current = nextInvite;
-        setBalance((prev) => Math.round((prev + amt) * 100) / 100);
-        setUserProfile((p) =>
-          p
-            ? {
-                ...p,
-                balance: Math.round(((p.balance || 0) + amt) * 100) / 100,
-                inviteBonusBalance: nextInvite,
-                referralBonusEarned: Math.round(((p.referralBonusEarned || 0) + amt) * 100) / 100,
-                lockedPrincipal: Math.round(((p.lockedPrincipal || 0) + amt) * 100) / 100,
+
+        if (auth.currentUser) {
+          // PostgreSQL approval flow credits the same wallet ledger. Refresh that one balance
+          // instead of adding a second client-side copy of the referral bonus.
+          void backendApi.getMe().then((me) => {
+            const serverBalance = Math.max(0, Number(me.wallet.balance || 0));
+            const previousServerBalance = serverWalletBalanceRef.current;
+            if (previousServerBalance === null) {
+              serverWalletBalanceRef.current = serverBalance;
+              setBalance(serverBalance);
+            } else {
+              const delta = Math.round((serverBalance - previousServerBalance) * 100) / 100;
+              serverWalletBalanceRef.current = serverBalance;
+              if (delta !== 0) {
+                setBalance((prev) => Math.max(0, Math.round((prev + delta) * 100) / 100));
               }
-            : null
-        );
+            }
+            setUserProfile(mapBackendMeToProfile(me, auth.currentUser));
+          }).catch((err) => console.warn('Could not refresh referral wallet credit:', err));
+        } else {
+          const nextInvite = Math.round((inviteBonusBalanceRef.current + amt) * 100) / 100;
+          inviteBonusBalanceRef.current = nextInvite;
+          setBalance((prev) => Math.round((prev + amt) * 100) / 100);
+          setUserProfile((p) =>
+            p
+              ? {
+                  ...p,
+                  balance: Math.round(((p.balance || 0) + amt) * 100) / 100,
+                  inviteBonusBalance: nextInvite,
+                  referralBonusEarned: Math.round(((p.referralBonusEarned || 0) + amt) * 100) / 100,
+                  lockedPrincipal: Math.round(((p.lockedPrincipal || 0) + amt) * 100) / 100,
+                }
+              : null
+          );
+        }
+
         setUserAlertToast({
           title: '🎁 ১০০% ইনভাইট বোনাস যুক্ত হয়েছে!',
           message: `আপনার ইনভাইট করা বন্ধু (${detail.depositorName || 'বন্ধু'}) প্রথম ডিপোজিট করায় ৳${amt.toLocaleString()} (১০০%) ইনভাইট বোনাস পেয়েছেন!`,
-          details: 'ইনভাইট বোনাস আলাদা Promotional Balance-এ জমা হয়। এটি সরাসরি Cash-out করা যায় না; বোনাস-ভিত্তিক গেম রাউন্ডে অতিরিক্ত নগদ জয়ের অর্থ যোগ হয় না।',
+          details: 'রেফারেল বোনাস আপনার মোট ওয়ালেট ব্যালেন্সে যোগ হয়।',
           type: 'success',
         });
       }
@@ -672,7 +698,19 @@ export default function App() {
           withdrawalStatuses.set(id, status);
         }
 
-        // Refresh profile metadata only. Keep the simulated game balance local.
+        // Merge server wallet changes into the same visible balance instead of showing
+        // the PostgreSQL wallet and local bonus/game amount as separate balances.
+        const serverBalance = Math.max(0, Number(me.wallet.balance || 0));
+        const previousServerBalance = serverWalletBalanceRef.current;
+        if (previousServerBalance === null) {
+          serverWalletBalanceRef.current = serverBalance;
+          setBalance((current) => current === 0 ? serverBalance : current);
+        } else if (serverBalance !== previousServerBalance) {
+          const serverDelta = Math.round((serverBalance - previousServerBalance) * 100) / 100;
+          serverWalletBalanceRef.current = serverBalance;
+          setBalance((current) => Math.max(0, Math.round((current + serverDelta) * 100) / 100));
+        }
+
         setUserProfile(mapBackendMeToProfile(me, auth.currentUser));
         initialLoad = false;
       } catch (err) {
@@ -2020,7 +2058,8 @@ export default function App() {
         onLoginSuccess={(user, profile) => {
           setCurrentUser(user);
           setUserProfile(profile);
-          setBalance(INITIAL_BALANCE);
+          setBalance(profile.balance || 0);
+          if (auth.currentUser) serverWalletBalanceRef.current = profile.balance || 0;
           setAuthNoticeMessage(null);
         }}
         onLogoutSuccess={() => {

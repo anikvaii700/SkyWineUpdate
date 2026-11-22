@@ -1,4 +1,5 @@
-import { auth } from './firebase';
+import { auth, type UserWalletProfile } from './firebase';
+import type { FirebaseUser } from 'firebase/auth';
 
 export class ApiClientError extends Error {
   readonly status: number;
@@ -60,6 +61,61 @@ async function apiRequest<T>(
   return data as T;
 }
 
+export interface BackendMeResponse {
+  user: {
+    uid: string;
+    userCode: string;
+    email: string | null;
+    displayName: string;
+    phoneNumber: string | null;
+    role: 'user' | 'admin';
+    isAdmin: boolean;
+    status: string;
+    referralCode: string;
+    firstDepositRewarded: boolean;
+    createdAt?: string;
+  };
+  wallet: {
+    userId: string;
+    balance: number;
+    inviteBonusLocked: number;
+    withdrawableBalance: number;
+    totalDeposited: number;
+    totalWithdrawn: number;
+    version: number;
+    updatedAt?: string;
+  };
+}
+
+export function mapBackendMeToProfile(
+  data: BackendMeResponse,
+  firebaseUser?: FirebaseUser | null
+): UserWalletProfile {
+  const now = new Date().toISOString();
+  return {
+    id: data.user.uid,
+    userCode: data.user.userCode,
+    email: data.user.email || firebaseUser?.email || '',
+    displayName: data.user.displayName || firebaseUser?.displayName || 'Player',
+    photoURL: firebaseUser?.photoURL || '',
+    phoneNumber: data.user.phoneNumber || firebaseUser?.phoneNumber || '',
+    balance: data.wallet.balance,
+    initialBonus: 0,
+    lockedPrincipal: data.wallet.inviteBonusLocked,
+    totalDeposited: data.wallet.totalDeposited,
+    firstDepositBonusEarned: 0,
+    hasDeposited: data.wallet.totalDeposited > 0,
+    referralCode: data.user.referralCode,
+    referralCount: 0,
+    referralBonusEarned: 0,
+    inviteBonusBalance: data.wallet.inviteBonusLocked,
+    firstDepositReferralRewarded: data.user.firstDepositRewarded,
+    status: data.user.status as UserWalletProfile['status'],
+    createdAt: data.user.createdAt || now,
+    updatedAt: data.wallet.updatedAt || now,
+  };
+}
+
 export const backendApi = {
   getHealth: () =>
     apiRequest<{
@@ -75,30 +131,7 @@ export const backendApi = {
       requireAuth: false,
     }),
 
-  getMe: () =>
-    apiRequest<{
-      user: {
-        uid: string;
-        userCode: string;
-        email: string | null;
-        displayName: string;
-        phoneNumber: string | null;
-        role: 'user' | 'admin';
-        isAdmin: boolean;
-        status: string;
-        referralCode: string;
-        firstDepositRewarded: boolean;
-      };
-      wallet: {
-        userId: string;
-        balance: number;
-        inviteBonusLocked: number;
-        withdrawableBalance: number;
-        totalDeposited: number;
-        totalWithdrawn: number;
-        version: number;
-      };
-    }>('/api/me'),
+  getMe: () => apiRequest<BackendMeResponse>('/api/me'),
 
   updateProfile: (payload: { displayName?: string; phoneNumber?: string; referralCode?: string }) =>
     apiRequest('/api/me/profile', { method: 'PATCH', body: payload }),

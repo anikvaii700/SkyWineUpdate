@@ -24,21 +24,27 @@ The current frontend still uses legacy Firestore/localStorage functions for wall
 
 ## Hosting configuration
 
-The included `server.ts` serves the built frontend and API from one Node web service. To use it, the Render service must be a **Web Service** (not a Static Site):
+The current architecture can keep the frontend and API as two Render services.
 
-- Build: `npm install && npm run build`
-- Start: `npm start`
-- Runtime: Node.js 24 or newer
+**Frontend Static Site** (the original `skywineupdate.onrender.com` service):
+- Add build-time variable `VITE_API_BASE_URL=https://skywinbd-security.onrender.com`
+- Rebuild/redeploy the frontend after setting it.
 
-Set these server-side environment variables in Render:
-
+**Backend Web Service** (the existing `skywinbd-security.onrender.com` service):
 - `NODE_ENV=production`
 - `DATABASE_URL`: the existing Neon connection string (secret)
 - `FIREBASE_PROJECT_ID=ai-studio-applet-webapp-98aca`
-- `ADMIN_EMAILS`: comma-separated list of verified Firebase email addresses that should receive initial admin role
-- `ALLOWED_ORIGINS`: may be empty for same-origin hosting
+- `ADMIN_PHONES`: the owner phone number used by the app's admin-account check
+- `ALLOWED_ORIGINS=https://skywineupdate.onrender.com` (include any other exact frontend origin only when needed)
 
-Never put `DATABASE_URL` or any secret in a `VITE_*` variable or commit a real credential.
+The frontend API client reads `VITE_API_BASE_URL`; when it is empty, it uses same-origin `/api` routes. Never put `DATABASE_URL` or any secret in a `VITE_*` variable or commit a real credential.
+
+Alternatively, the new `server.ts` serves the built frontend and API together as one Node Web Service:
+- Build: `npm install && npm run build`
+- Start: `npm start`
+- Runtime: Node.js 24 or newer
+- For same-origin hosting, leave `VITE_API_BASE_URL` empty and leave `ALLOWED_ORIGINS` empty.
+
 
 ## Before enabling money operations
 

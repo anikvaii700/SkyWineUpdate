@@ -732,130 +732,99 @@ export default function App() {
     return () => window.removeEventListener('payment_settings_updated', handleSettingsUpdated);
   }, []);
 
-  // Real-time listener for user deposit/withdrawal approvals and alerts
+  // Poll the PostgreSQL ledger for approval/rejection notifications.
+  // The server wallet is intentionally kept separate from the local practice-game balance.
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !auth.currentUser) return;
 
-    // Reset status tracker on user change
-    isUserRequestsInitialRef.current = true;
-    knownDepositStatusesRef.current = {};
-    knownWithdrawalStatusesRef.current = {};
+    let cancelled = false;
+    let running = false;
+    const depositStatuses = new Map<string, string>();
+    const withdrawalStatuses = new Map<string, string>();
+    let initialLoad = true;
 
-    const cleanMyPhone = currentUser.phoneNumber ? currentUser.phoneNumber.replace(/[^0-9]/g, '') : '';
-    const myUserCode = currentUser.userCode || '';
+    const refreshServerLedger = async () => {
+      if (running || !auth.currentUser) return;
+      running = true;
+      try {
+        const [depositResult, withdrawalResult, me] = await Promise.all([
+          backendApi.listMyDeposits(100, 0),
+          backendApi.listMyWithdrawals(100, 0),
+          backendApi.getMe(),
+        ]);
+        if (cancelled) return;
 
-    // 1. Listen to Deposit Request transitions for this user
-    const unsubDeposits = listenToDepositRequests((allRequests) => {
-      const myDeposits = allRequests.filter((r) => {
-        if (r.userId === currentUser.uid) return true;
-        if (cleanMyPhone && (r.senderNumber === cleanMyPhone || r.userIdentifier.includes(cleanMyPhone))) return true;
-        if (myUserCode && r.userCode === myUserCode) return true;
-        return false;
-      });
+        const deposits = (depositResult as { deposits?: Array<Record<string, any>> }).deposits || [];
+        const withdrawals = (withdrawalResult as { withdrawals?: Array<Record<string, any>> }).withdrawals || [];
 
-      if (isUserRequestsInitialRef.current) {
-        myDeposits.forEach((r) => {
-          knownDepositStatusesRef.current[r.id] = r.status;
-        });
-        return;
+        for (const row of deposits) {
+          const id = String(row.id);
+          const status = String(row.status || '');
+          const previous = depositStatuses.get(id);
+          if (!initialLoad && previous === 'pending' && status === 'approved') {
+            soundManager.playWin();
+            setUserAlertToast({
+              title: 'ডিপোজিট অনুমোদিত হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার ডিপোজিট অনুমোদিত হয়েছে।`,
+              details: 'সার্ভারের ওয়ালেট ব্যালেন্স আপডেট হয়েছে।',
+              type: 'success',
+            });
+          } else if (!initialLoad && previous === 'pending' && status === 'rejected') {
+            soundManager.playCrash();
+            setUserAlertToast({
+              title: 'ডিপোজিট রিকোয়েস্ট বাতিল হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার ডিপোজিট রিকোয়েস্ট বাতিল হয়েছে।`,
+              details: String(row.rejection_reason || 'অ্যাডমিন রিকোয়েস্টটি বাতিল করেছেন।'),
+              type: 'error',
+            });
+          }
+          depositStatuses.set(id, status);
+        }
+
+        for (const row of withdrawals) {
+          const id = String(row.id);
+          const status = String(row.status || '');
+          const previous = withdrawalStatuses.get(id);
+          if (!initialLoad && previous === 'pending' && status === 'completed') {
+            soundManager.playWin();
+            setUserAlertToast({
+              title: 'উত্তোলন সম্পন্ন হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার উত্তোলন সম্পন্ন হয়েছে।`,
+              details: `পেমেন্ট নম্বর: ${String(row.personal_number || '')}`,
+              type: 'success',
+            });
+          } else if (!initialLoad && previous === 'pending' && status === 'rejected') {
+            soundManager.playCrash();
+            setUserAlertToast({
+              title: 'উত্তোলন বাতিল হয়েছে',
+              message: `আপনার ৳ ${Number(row.amount || 0).toLocaleString()} টাকার উত্তোলন বাতিল হয়েছে।`,
+              details: String(row.rejection_reason || 'সার্ভারের ওয়ালেটে টাকা ফেরত যোগ হয়েছে।'),
+              type: 'warning',
+            });
+          }
+          withdrawalStatuses.set(id, status);
+        }
+
+        // Refresh profile metadata only. Keep the simulated game balance local.
+        setUserProfile(mapBackendMeToProfile(me, auth.currentUser));
+        initialLoad = false;
+      } catch (err) {
+        if (!cancelled) console.warn('Server wallet refresh failed:', err);
+      } finally {
+        running = false;
       }
+    };
 
-      myDeposits.forEach((r) => {
-        const prevStatus = knownDepositStatusesRef.current[r.id];
-        // Deposit Approved: User gets celebration alert & immediate balance reflection
-        if (prevStatus === 'pending' && r.status === 'approved') {
-          soundManager.playWin();
-          setUserAlertToast({
-            title: 'এড মানি সফলভাবে অনুমোদিত!',
-            message: `আপনার ৳ ${r.amount.toLocaleString()} টাকার ${r.method.toUpperCase()} ডিপোজিট অনুমোদিত হয়েছে!`,
-            details: `ট্রানজেকশন আইডি: ${r.trxId}। একাউন্টে ৳ ${r.amount.toLocaleString()} ব্যালেন্স সফলভাবে যোগ করা হয়েছে।`,
-            type: 'success',
-          });
-
-          // Immediate local balance credit so user sees funds without delay
-          setBalance((prev) => {
-            const next = Math.round((prev + r.amount) * 100) / 100;
-            if (currentUser.provider === 'phone') {
-              updatePhoneAccountBalanceLocally(currentUser.uid, next);
-              if (cleanMyPhone) updatePhoneAccountBalanceLocally(cleanMyPhone, next);
-            }
-            return next;
-          });
-          setUserProfile((p) => (p ? { ...p, balance: Math.round(((p.balance || 0) + r.amount) * 100) / 100 } : null));
-        }
-        // Deposit Rejected: User gets reason notification
-        else if (prevStatus === 'pending' && r.status === 'rejected') {
-          soundManager.playCrash();
-          setUserAlertToast({
-            title: 'এড মানি বাতিল করা হয়েছে',
-            message: `আপনার ৳ ${r.amount.toLocaleString()} টাকার ${r.method.toUpperCase()} ডিপোজিট রিকোয়েস্ট বাতিল হয়েছে।`,
-            details: `কারণ: ${r.rejectionReason || 'সঠিক তথ্য বা TrxID না পাওয়ায় বাতিল করা হয়েছে।'}`,
-            type: 'error',
-          });
-        }
-        knownDepositStatusesRef.current[r.id] = r.status;
-      });
-    });
-
-    // 2. Listen to Withdrawal Request transitions for this user
-    const unsubWithdrawals = listenToWithdrawalRequests((allWithdrawals) => {
-      const myWithdrawals = allWithdrawals.filter((w) => {
-        if (w.userId === currentUser.uid) return true;
-        if (cleanMyPhone && (w.personalNumber === cleanMyPhone || w.userIdentifier.includes(cleanMyPhone))) return true;
-        if (myUserCode && w.userCode === myUserCode) return true;
-        return false;
-      });
-
-      if (isUserRequestsInitialRef.current) {
-        myWithdrawals.forEach((w) => {
-          knownWithdrawalStatusesRef.current[w.id] = w.status;
-        });
-        isUserRequestsInitialRef.current = false;
-        return;
-      }
-
-      myWithdrawals.forEach((w) => {
-        const prevStatus = knownWithdrawalStatusesRef.current[w.id];
-        // Withdrawal Completed: User gets payout alert
-        if (prevStatus === 'pending' && w.status === 'completed') {
-          soundManager.playWin();
-          setUserAlertToast({
-            title: 'ক্যাশআউট সফল হয়েছে!',
-            message: `আপনার ৳ ${w.amount.toLocaleString()} টাকার ${w.method.toUpperCase()} উত্তোলন সফলভাবে সম্পন্ন হয়েছে!`,
-            details: `টাকা আপনার পার্সোনাল নম্বর (+88 ${w.personalNumber})-এ পাঠিয়ে দেওয়া হয়েছে।`,
-            type: 'success',
-          });
-        }
-        // Withdrawal Rejected: User gets refund alert & balance restored
-        else if (prevStatus === 'pending' && w.status === 'rejected') {
-          soundManager.playCrash();
-          setUserAlertToast({
-            title: 'ক্যাশআউট বাতিল ও রিফান্ড',
-            message: `আপনার ৳ ${w.amount.toLocaleString()} টাকার উত্তোলন বাতিল হয়েছে এবং টাকা ব্যালেন্সে ফেরত দেওয়া হয়েছে।`,
-            details: `কারণ: ${w.rejectionReason || 'ভুল নম্বর বা তথ্যগত ত্রুটির কারণে রিফান্ড করা হয়েছে।'}`,
-            type: 'warning',
-          });
-
-          // Immediate local refund
-          setBalance((prev) => {
-            const next = Math.round((prev + w.amount) * 100) / 100;
-            if (currentUser.provider === 'phone') {
-              updatePhoneAccountBalanceLocally(currentUser.uid, next);
-              if (cleanMyPhone) updatePhoneAccountBalanceLocally(cleanMyPhone, next);
-            }
-            return next;
-          });
-          setUserProfile((p) => (p ? { ...p, balance: Math.round(((p.balance || 0) + w.amount) * 100) / 100 } : null));
-        }
-        knownWithdrawalStatusesRef.current[w.id] = w.status;
-      });
-    });
+    void refreshServerLedger();
+    const timer = window.setInterval(() => void refreshServerLedger(), 30000);
+    window.addEventListener('focus', refreshServerLedger);
 
     return () => {
-      unsubDeposits();
-      unsubWithdrawals();
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshServerLedger);
     };
-  }, [currentUser?.uid, currentUser?.phoneNumber]);
+  }, [currentUser?.uid]);
 
   // Sync balance updates with Firestore cloud wallet or Phone Account storage
   const updateBalanceAndSync = useCallback((updater: (prev: number) => number) => {

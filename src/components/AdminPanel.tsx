@@ -420,7 +420,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const latestSettings = getStoredPaymentSettings();
     const activeAdminPin = (latestSettings.adminPin || settings.adminPin || '1234').trim();
     if (pinInput.trim() === activeAdminPin) {
-      setIsAuthenticated(true);
       setPinError('');
       soundManager.playClick();
     } else {

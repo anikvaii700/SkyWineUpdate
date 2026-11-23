@@ -29,7 +29,7 @@ import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../se
 import {
   signInWithGoogle,
   requestPasswordReset,
-  resendEmailVerification,
+  auth,
   logoutUser as firebaseLogout,
   updateUserPhoneNumber,
   getOrCreateUserProfile,
@@ -79,6 +79,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // Form states
   const [email, setEmail] = useState('');
+  const [emailOtp, setEmailOtp] = useState('');
+  const [otpStep, setOtpStep] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -165,15 +167,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setErrorMsg('সঠিক ইমেইল ঠিকানা দিন।');
-      return;
-    }
-
-    const { cleanPhone } = normalizePhoneNumber(phoneNumber);
-    if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
-      setErrorMsg('অনুগ্রহ করে সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 01712345678)');
-      return;
+    if (authMode === 'signup') {
+      if (!email.trim() || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email.trim())) {
+        setErrorMsg('সঠিক ইমেইল ঠিকানা দিন।'); return;
+      }
+      const { cleanPhone } = normalizePhoneNumber(phoneNumber);
+      if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
+        setErrorMsg('সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।'); return;
+      }
+    } else if (!phoneNumber.trim()) {
+      setErrorMsg('মোবাইল নম্বর অথবা ইমেইল লিখুন।'); return;
     }
 
     if (!password || password.length < 6) {
@@ -200,17 +203,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           return;
         }
 
-        setSuccessMsg('অ্যাকাউন্ট তৈরি হয়েছে। আপনার ইমেইলে ভেরিফিকেশন লিংক পাঠানো হয়েছে। ইনবক্স/স্প্যাম ফোল্ডার দেখুন। লিংকে ক্লিক করার পর লগইন করুন।');
-        setAuthMode('login');
+        setOtpStep(true);
+        setSuccessMsg('আপনার ইমেইলে ৬ সংখ্যার OTP পাঠানো হয়েছে। কোডটি লিখে ইমেইল যাচাই করুন।');
       } else {
-        const res = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
+        const res = await loginPhoneAccount(phoneNumber, '', password, referralCodeInput);
         if (!res.success || !res.user || !res.profile) {
           setErrorMsg(res.error || 'লগইন ব্যর্থ হয়েছে।');
           return;
         }
 
         soundManager.playWin();
-        setSuccessMsg('মোবাইল নাম্বার দিয়ে লগইন সফল হয়েছে!');
+        setSuccessMsg('লগইন সফল হয়েছে!');
         onLoginSuccess(res.user, res.profile);
         setTimeout(() => {
           onClose();
@@ -224,23 +227,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleResendVerification = async () => {
-    if (!email.trim() || !password) {
-      setErrorMsg('ভেরিফিকেশন লিংক পাঠাতে ইমেইল ও পাসওয়ার্ড দিন।');
-      return;
+  const handleVerifyEmailOtp = async () => {
+    if (!/^\\d{6}$/.test(emailOtp) || !auth.currentUser) {
+      setErrorMsg('ইমেইলে পাওয়া ৬ সংখ্যার OTP লিখুন।'); return;
     }
-    setIsLoading(true);
-    setErrorMsg(null);
+    setIsLoading(true); setErrorMsg(null);
     try {
-      await resendEmailVerification(email, password);
-      setSuccessMsg('নতুন ভেরিফিকেশন লিংক আপনার ইমেইলে পাঠানো হয়েছে।');
+      const { cleanPhone } = normalizePhoneNumber(phoneNumber);
+      await backendApi.verifyEmailOtp(email.trim().toLowerCase(), emailOtp, cleanPhone);
+      await auth.currentUser.reload();
+      await auth.currentUser.getIdToken(true);
+      const me = await backendApi.getMe();
+      const profile = mapBackendMeToProfile(me, auth.currentUser);
+      const appUser: AppUser = {
+        uid: auth.currentUser.uid, userCode: me.user.userCode,
+        referralCode: me.user.referralCode || me.user.userCode,
+        displayName: me.user.displayName || fullName || 'Player',
+        email: auth.currentUser.email, phoneNumber: me.user.phoneNumber,
+        photoURL: auth.currentUser.photoURL, provider: 'phone',
+        isAdmin: me.user.isAdmin === true, status: me.user.status as AppUser['status'],
+      };
+      onLoginSuccess(appUser, profile);
+      setSuccessMsg('ইমেইল যাচাই সম্পন্ন। অ্যাকাউন্ট চালু হয়েছে।');
+      setTimeout(onClose, 500);
     } catch (err) {
-      setErrorMsg(err instanceof Error && err.message === 'EMAIL_ALREADY_VERIFIED'
-        ? 'এই ইমেইল ইতোমধ্যে ভেরিফাই করা হয়েছে। লগইন করুন।'
-        : 'ভেরিফিকেশন লিংক পাঠানো যায়নি। ইমেইল ও পাসওয়ার্ড যাচাই করুন।');
-    } finally {
-      setIsLoading(false);
-    }
+      setErrorMsg(err instanceof Error ? err.message : 'OTP যাচাই করা যায়নি।');
+    } finally { setIsLoading(false); }
   };
 
   const handlePasswordReset = async () => {

@@ -140,6 +140,20 @@ export interface BackendReferralSummary {
 }
 
 export const backendApi = {
+  sendEmailOtp: (email: string) =>
+    apiRequest<{ ok: boolean; expiresInSeconds?: number; resendAfterSeconds?: number; alreadyVerified?: boolean }>(
+      '/api/auth/email-otp/send',
+      { method: 'POST', body: { email } }
+    ),
+  verifyEmailOtp: (email: string, otp: string, phoneNumber: string) =>
+    apiRequest<{ ok: boolean; emailVerified: boolean; user?: unknown; wallet?: unknown }>(
+      '/api/auth/email-otp/verify',
+      { method: 'POST', body: { email, otp, phoneNumber } }
+    ),
+  resolveLoginEmail: (identifier: string) =>
+    apiRequest<{ email: string }>('/api/auth/resolve-login', {
+      method: 'POST', body: { identifier }, requireAuth: false,
+    }),
   getHealth: () =>
     apiRequest<{
       ok: boolean;

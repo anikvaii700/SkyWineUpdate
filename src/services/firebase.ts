@@ -8,6 +8,8 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   updateProfile,
+  sendPasswordResetEmail,
+  reload,
   User as FirebaseUser,
 } from 'firebase/auth';
 import {
@@ -152,6 +154,31 @@ export async function signInWithEmail(
 ): Promise<FirebaseUser> {
   const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
   return userCredential.user;
+}
+
+
+/** Create an email/password account; the backend sends the numeric email OTP. */
+export async function createVerifiedEmailAccount(email: string, pass: string, name?: string): Promise<FirebaseUser> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const credential = await createUserWithEmailAndPassword(auth, normalizedEmail, pass);
+  if (name?.trim()) await updateProfile(credential.user, { displayName: name.trim() });
+  return credential.user;
+}
+
+/** Sign in only after the backend has marked the email verified. */
+export async function signInWithVerifiedEmail(email: string, pass: string): Promise<FirebaseUser> {
+  const credential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), pass);
+  await reload(credential.user);
+  if (!credential.user.emailVerified) {
+    await signOut(auth);
+    throw new Error('EMAIL_NOT_VERIFIED');
+  }
+  await credential.user.getIdToken(true);
+  return credential.user;
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+  await sendPasswordResetEmail(auth, email.trim().toLowerCase(), { url: window.location.origin, handleCodeInApp: false });
 }
 
 // User sign-out

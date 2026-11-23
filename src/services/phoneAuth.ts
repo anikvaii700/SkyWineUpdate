@@ -248,80 +248,62 @@ async function getServerPhoneAccount(phone: string): Promise<{ user: AppUser; pr
   return { user, profile };
 }
 
-// New phone accounts are authenticated by Firebase Auth, never by Local Storage passwords.
-// Wallet and role are provisioned and returned by the Express/PostgreSQL backend.
+// New accounts require email and a mobile number; only the email receives OTP.
 export async function registerPhoneAccount(
+  email: string,
   rawPhone: string,
   pass: string,
   fullName?: string,
-  referralCodeInput?: string
-): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string; referralBonusApplied?: boolean }> {
+  _referralCodeInput?: string
+): Promise<{ success: boolean; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  if (!/^01[0-9]{9}$/.test(cleanPhone)) {
-    return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
-  }
-  if (!pass || pass.length < 6) {
-    return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
-  }
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return { success: false, error: 'সঠিক ইমেইল ঠিকানা দিন।' };
+  if (!pass || pass.length < 6) return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
 
   try {
     const { getStoredAppControls } = await import('./appControlService');
-    if (!getStoredAppControls().registrationEnabled) {
-      return { success: false, error: 'নতুন অ্যাকাউন্ট রেজিস্ট্রেশন সাময়িকভাবে বন্ধ আছে।' };
-    }
-
-    // Keep the device registration limit, but do not store credentials locally.
+    if (!getStoredAppControls().registrationEnabled) return { success: false, error: 'নতুন অ্যাকাউন্ট রেজিস্ট্রেশন সাময়িকভাবে বন্ধ আছে।' };
     const deviceCheck = await canRegisterNewAccountOnDevice(cleanPhone);
-    if (!deviceCheck.allowed) {
-      return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
-    }
+    if (!deviceCheck.allowed) return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
 
-    await signUpWithPhone(cleanPhone, pass, fullName);
-    if (referralCodeInput?.trim()) {
-      await backendApi.updateProfile({ referralCode: referralCodeInput.trim() });
-    }
-    const account = await getServerPhoneAccount(cleanPhone);
+    const { createVerifiedEmailAccount } = await import('./firebase');
+    await createVerifiedEmailAccount(normalizedEmail, pass, fullName);
+    await backendApi.sendEmailOtp(normalizedEmail);
     await recordAccountRegistrationOnDevice(cleanPhone);
-    try {
-      localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
-      localStorage.removeItem(STORAGE_SESSION_KEY);
-    } catch {}
-    return { success: true, ...account, referralBonusApplied: false };
+    return { success: true };
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
-    if (code === 'auth/email-already-in-use') {
-      return { success: false, error: 'এই মোবাইল নম্বরে অ্যাকাউন্ট আগে থেকেই আছে। লগইন করুন।' };
-    }
-    if (code === 'auth/weak-password') {
-      return { success: false, error: 'পাসওয়ার্ড আরও শক্তিশালী করুন।' };
-    }
+    if (code === 'auth/email-already-in-use') return { success: false, error: 'এই ইমেইল দিয়ে অ্যাকাউন্ট আগে থেকেই আছে। লগইন করুন।' };
+    if (code === 'auth/weak-password') return { success: false, error: 'পাসওয়ার্ড আরও শক্তিশালী করুন।' };
     return { success: false, error: err instanceof Error ? err.message : 'অ্যাকাউন্ট তৈরি করা যায়নি।' };
   }
 }
 
-// Phone login is a Firebase Auth sign-in. The server creates/loads the account and
-// applies ADMIN_PHONES authorization only after verifying the Firebase ID token.
 export async function loginPhoneAccount(
-  rawPhone: string,
-  pass: string
+  identifier: string,
+  _rawPhone: string,
+  pass: string,
+  referralCodeInput?: string
 ): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
-  const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  if (!/^01[0-9]{9}$/.test(cleanPhone)) {
-    return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
-  }
   try {
-    await signInWithPhone(cleanPhone, pass);
-    const account = await getServerPhoneAccount(cleanPhone);
-    try {
-      localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
-      localStorage.removeItem(STORAGE_SESSION_KEY);
-    } catch {}
+    const normalizedIdentifier = identifier.trim();
+    const email = normalizedIdentifier.includes('@')
+      ? normalizedIdentifier.toLowerCase()
+      : (await backendApi.resolveLoginEmail(normalizedIdentifier)).email;
+    const { signInWithVerifiedEmail } = await import('./firebase');
+    await signInWithVerifiedEmail(email, pass);
+    if (referralCodeInput?.trim()) await backendApi.updateProfile({ referralCode: referralCodeInput.trim() });
+    const account = await getServerPhoneAccount(normalizedIdentifier.includes('@') ? '' : normalizePhoneNumber(normalizedIdentifier).cleanPhone);
+    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true, ...account };
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
-    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-      return { success: false, error: 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।' };
+    if (err instanceof Error && err.message === 'EMAIL_NOT_VERIFIED') {
+      return { success: false, error: 'আপনার ইমেইলে পাঠানো ৬ সংখ্যার OTP দিয়ে আগে যাচাই করুন।' };
     }
+    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') return { success: false, error: 'মোবাইল/ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।' };
     return { success: false, error: err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।' };
   }
 }

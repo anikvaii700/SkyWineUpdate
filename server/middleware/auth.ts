@@ -41,6 +41,9 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps = {}) {
     try {
       const token = extractBearerToken(req);
       const identity = await verifyToken(token);
+      if (!identity.emailVerified) {
+        throw new HttpError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email address before using SkyWinBD.');
+      }
       const user = await resolveUser(identity);
 
       if (user.status !== 'active') {

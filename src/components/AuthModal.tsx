@@ -165,7 +165,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!email.trim() || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email.trim())) {\n      setErrorMsg('সঠিক ইমেইল ঠিকানা দিন।');\n      return;\n    }\n\n    const { cleanPhone } = normalizePhoneNumber(phoneNumber);
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setErrorMsg('সঠিক ইমেইল ঠিকানা দিন।');
+      return;
+    }
+
+    const { cleanPhone } = normalizePhoneNumber(phoneNumber);
     if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
       setErrorMsg('অনুগ্রহ করে সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 01712345678)');
       return;
@@ -187,7 +192,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       if (authMode === 'signup') {
         const res = await registerPhoneAccount(email, phoneNumber, password, fullName, referralCodeInput);
-        if (!res.success || !res.user || !res.profile) {
+        if (!res.success) {
           setErrorMsg(res.error || 'অ্যাকাউন্ট তৈরি করা যায়নি');
           if (res.error?.includes('ইতোমধ্যে')) {
             setAuthMode('login');
@@ -624,6 +629,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {/* Email + mobile registration is the only supported account method. */}
               <div className="rounded-xl border border-emerald-700/40 bg-emerald-950/20 px-3 py-2 text-center text-xs text-emerald-300">
                 ইমেইল ভেরিফিকেশনসহ মোবাইল অ্যাকাউন্ট
+              </div>
+
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs text-slate-300 font-medium">
+                  {authMode === 'signup' ? 'নতুন অ্যাকাউন্ট খুলুন:' : 'বিদ্যমান অ্যাকাউন্টে প্রবেশ করুন:'}
+                </span>
+                <div className="flex gap-1 bg-[#151c2a] p-0.5 rounded-lg border border-[#222e43]">
+                  <button type="button" onClick={() => { setAuthMode('signup'); setErrorMsg(null); setSuccessMsg(null); }}
+                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'signup' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                    সাইনআপ
+                  </button>
+                  <button type="button" onClick={() => { setAuthMode('login'); setErrorMsg(null); setSuccessMsg(null); }}
+                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'login' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                    লগইন
+                  </button>
+                </div>
               </div>
 
               {/* Feedback messages */}

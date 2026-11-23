@@ -175,6 +175,8 @@ export async function signInWithVerifiedEmail(email: string, pass: string): Prom
     await signOut(auth);
     throw new Error('EMAIL_NOT_VERIFIED');
   }
+  // Refresh the ID token so the server receives the updated email_verified claim.
+  await credential.user.getIdToken(true);
   return credential.user;
 }
 

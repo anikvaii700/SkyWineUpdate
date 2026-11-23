@@ -198,7 +198,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setSuccessMsg('অ্যাকাউন্ট তৈরি হয়েছে। আপনার ইমেইলে ভেরিফিকেশন লিংক পাঠানো হয়েছে। ইনবক্স/স্প্যাম ফোল্ডার দেখুন। লিংকে ক্লিক করার পর লগইন করুন।');
         setAuthMode('login');
       } else {
-        const res = await loginPhoneAccount(email, phoneNumber, password);
+        const res = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
         if (!res.success || !res.user || !res.profile) {
           setErrorMsg(res.error || 'লগইন ব্যর্থ হয়েছে।');
           return;

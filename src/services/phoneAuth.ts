@@ -248,80 +248,62 @@ async function getServerPhoneAccount(phone: string): Promise<{ user: AppUser; pr
   return { user, profile };
 }
 
-// New phone accounts are authenticated by Firebase Auth, never by Local Storage passwords.
-// Wallet and role are provisioned and returned by the Express/PostgreSQL backend.
+// New accounts use real email/password identities; phone is stored as a required profile field.
 export async function registerPhoneAccount(
+  email: string,
   rawPhone: string,
   pass: string,
   fullName?: string,
   referralCodeInput?: string
-): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string; referralBonusApplied?: boolean }> {
+): Promise<{ success: boolean; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  if (!/^01[0-9]{9}$/.test(cleanPhone)) {
-    return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
-  }
-  if (!pass || pass.length < 6) {
-    return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
-  }
+  if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
+  if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return { success: false, error: 'সঠিক ইমেইল ঠিকানা দিন।' };
+  if (!pass || pass.length < 6) return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
 
   try {
     const { getStoredAppControls } = await import('./appControlService');
-    if (!getStoredAppControls().registrationEnabled) {
-      return { success: false, error: 'নতুন অ্যাকাউন্ট রেজিস্ট্রেশন সাময়িকভাবে বন্ধ আছে।' };
-    }
-
-    // Keep the device registration limit, but do not store credentials locally.
+    if (!getStoredAppControls().registrationEnabled) return { success: false, error: 'নতুন অ্যাকাউন্ট রেজিস্ট্রেশন সাময়িকভাবে বন্ধ আছে।' };
     const deviceCheck = await canRegisterNewAccountOnDevice(cleanPhone);
-    if (!deviceCheck.allowed) {
-      return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
-    }
+    if (!deviceCheck.allowed) return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
 
-    await signUpWithPhone(cleanPhone, pass, fullName);
-    if (referralCodeInput?.trim()) {
-      await backendApi.updateProfile({ referralCode: referralCodeInput.trim() });
-    }
-    const account = await getServerPhoneAccount(cleanPhone);
+    const { createVerifiedEmailAccount } = await import('./firebase');
+    await createVerifiedEmailAccount(email, pass, fullName);
     await recordAccountRegistrationOnDevice(cleanPhone);
-    try {
-      localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
-      localStorage.removeItem(STORAGE_SESSION_KEY);
-    } catch {}
-    return { success: true, ...account, referralBonusApplied: false };
+    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+    return { success: true };
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
-    if (code === 'auth/email-already-in-use') {
-      return { success: false, error: 'এই মোবাইল নম্বরে অ্যাকাউন্ট আগে থেকেই আছে। লগইন করুন।' };
-    }
-    if (code === 'auth/weak-password') {
-      return { success: false, error: 'পাসওয়ার্ড আরও শক্তিশালী করুন।' };
-    }
+    if (code === 'auth/email-already-in-use') return { success: false, error: 'এই ইমেইল দিয়ে অ্যাকাউন্ট আগে থেকেই আছে। লগইন করুন।' };
+    if (code === 'auth/weak-password') return { success: false, error: 'পাসওয়ার্ড আরও শক্তিশালী করুন।' };
     return { success: false, error: err instanceof Error ? err.message : 'অ্যাকাউন্ট তৈরি করা যায়নি।' };
   }
 }
 
-// Phone login is a Firebase Auth sign-in. The server creates/loads the account and
-// applies ADMIN_PHONES authorization only after verifying the Firebase ID token.
 export async function loginPhoneAccount(
+  email: string,
   rawPhone: string,
-  pass: string
+  pass: string,
+  referralCodeInput?: string
 ): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  if (!/^01[0-9]{9}$/.test(cleanPhone)) {
-    return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
-  }
+  if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
   try {
-    await signInWithPhone(cleanPhone, pass);
+    const { signInWithVerifiedEmail } = await import('./firebase');
+    await signInWithVerifiedEmail(email, pass);
+    await backendApi.updateProfile({
+      phoneNumber: cleanPhone,
+      ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
+    });
     const account = await getServerPhoneAccount(cleanPhone);
-    try {
-      localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
-      localStorage.removeItem(STORAGE_SESSION_KEY);
-    } catch {}
+    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true, ...account };
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
-    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-      return { success: false, error: 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।' };
+    if (err instanceof Error && err.message === 'EMAIL_NOT_VERIFIED') {
+      return { success: false, error: 'আপনার ইমেইল এখনো ভেরিফাই হয়নি। ইমেইলের লিংকে ক্লিক করুন, তারপর লগইন করুন।' };
     }
+    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') return { success: false, error: 'ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।' };
     return { success: false, error: err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।' };
   }
 }

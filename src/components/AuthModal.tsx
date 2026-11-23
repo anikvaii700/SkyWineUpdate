@@ -416,7 +416,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           type="tel"
                           value={editPhoneNumber}
                           onChange={(e) => setEditPhoneNumber(e.target.value)}
-                          placeholder="017xxxxxxxx"
+                          placeholder={authMode === 'signup' ? '017xxxxxxxx' : 'মোবাইল নম্বর অথবা email@example.com'}
                           className="w-full bg-[#090d14] border border-[#2b3952] rounded-xl pl-16 pr-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500"
                         />
                       </div>
@@ -672,8 +672,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               )}
 
-              {/* TAB 1: MOBILE NUMBER SIGNUP & LOGIN */}
-              {activeMethod === 'phone' && (
+              {/* Email OTP verification step */}
+              {otpStep && (
+                <div className="space-y-3 rounded-2xl border border-emerald-700/40 bg-emerald-950/20 p-4">
+                  <p className="text-sm font-bold text-emerald-300">ইমেইলে পাঠানো ৬ সংখ্যার OTP দিন</p>
+                  <input type="text" inputMode="numeric" maxLength={6} value={emailOtp}
+                    onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="000000"
+                    className="w-full rounded-xl border border-[#2b3952] bg-[#090d14] px-4 py-3 text-center text-xl tracking-[0.5em] text-white" />
+                  <button type="button" onClick={handleVerifyEmailOtp} disabled={isLoading}
+                    className="w-full rounded-xl bg-emerald-600 py-3 font-bold text-white disabled:opacity-50">
+                    {isLoading ? 'যাচাই হচ্ছে...' : 'OTP যাচাই করুন'}
+                  </button>
+                </div>
+              )}
+
+              {/* Signup/login form */}
+              {!otpStep && activeMethod === 'phone' && (
                 <div className="space-y-4">
                   <div className="bg-[#0b0e15] border border-[#1d273a] rounded-2xl p-3 flex items-center gap-3">
                     <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
@@ -705,6 +720,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </div>
                     )}
 
+                    {authMode === 'signup' && (
                     <div>
                       <label className="block text-[11px] font-bold text-slate-300 mb-1">
                         ইমেইল ঠিকানা <span className="text-rose-400">*</span>
@@ -722,17 +738,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         />
                       </div>
                     </div>
+                    )}
                     <div>
                       <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                        মোবাইল নাম্বার (১১ ডিজিট)
+                        {authMode === 'signup' ? 'মোবাইল নাম্বার (১১ ডিজিট)' : 'মোবাইল নম্বর অথবা ইমেইল'}
                       </label>
                       <div className="relative flex items-center">
                         <div className="absolute left-2.5 flex items-center gap-1 text-slate-400 text-xs font-mono select-none">
-                          <span className="text-sm">🇧🇩</span>
-                          <span className="font-bold text-emerald-400">+88</span>
+                          {authMode === 'signup' && <><span className="text-sm">🇧🇩</span><span className="font-bold text-emerald-400">+88</span></>}
                         </div>
                         <input
-                          type="tel"
+                          type={authMode === 'signup' ? 'tel' : 'text'}
                           required
                           value={phoneNumber}
                           onChange={(e) => setPhoneNumber(e.target.value)}

@@ -283,14 +283,18 @@ export async function registerPhoneAccount(
 export async function loginPhoneAccount(
   email: string,
   rawPhone: string,
-  pass: string
+  pass: string,
+  referralCodeInput?: string
 ): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
   if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
   try {
     const { signInWithVerifiedEmail } = await import('./firebase');
     await signInWithVerifiedEmail(email, pass);
-    await backendApi.updateProfile({ phoneNumber: cleanPhone });
+    await backendApi.updateProfile({
+      phoneNumber: cleanPhone,
+      ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
+    });
     const account = await getServerPhoneAccount(cleanPhone);
     try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true, ...account };

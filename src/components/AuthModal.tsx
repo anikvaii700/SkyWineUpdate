@@ -621,80 +621,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               )}
 
-              {/* Top Navigation Tabs: Mobile Number vs Gmail */}
-              <div className="grid grid-cols-2 gap-2 p-1 bg-[#0a0e17] border border-[#1f2b3e] rounded-2xl">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveMethod('phone');
-                    setErrorMsg(null);
-                    setSuccessMsg(null);
-                  }}
-                  className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                    activeMethod === 'phone'
-                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Smartphone className="w-4 h-4" />
-                  <span>মোবাইল নাম্বার</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveMethod('google');
-                    setErrorMsg(null);
-                    setSuccessMsg(null);
-                  }}
-                  className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                    activeMethod === 'google'
-                      ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Mail className="w-4 h-4" />
-                  <span>জিমেইল (Google)</span>
-                </button>
+              {/* Email + mobile registration is the only supported account method. */}
+              <div className="rounded-xl border border-emerald-700/40 bg-emerald-950/20 px-3 py-2 text-center text-xs text-emerald-300">
+                ইমেইল ভেরিফিকেশনসহ মোবাইল অ্যাকাউন্ট
               </div>
-
-              {/* Sub-mode switch (Login vs Signup) for Phone */}
-              {activeMethod === 'phone' && (
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs text-slate-300 font-medium">
-                    {authMode === 'signup' ? 'নতুন অ্যাকাউন্ট খুলুন:' : 'বিদ্যমান অ্যাকাউন্টে প্রবেশ করুন:'}
-                  </span>
-                  <div className="flex gap-1 bg-[#151c2a] p-0.5 rounded-lg border border-[#222e43]">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuthMode('signup');
-                        setErrorMsg(null);
-                      }}
-                      className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                        authMode === 'signup'
-                          ? 'bg-emerald-500 text-white shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      সাইনআপ
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuthMode('login');
-                        setErrorMsg(null);
-                      }}
-                      className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                        authMode === 'login'
-                          ? 'bg-emerald-500 text-white shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      লগইন
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {/* Feedback messages */}
               {errorMsg && (
@@ -890,18 +820,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </button>
                   </form>
 
-                  {/* Or Google 1-click option */}
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={handleGoogleLogin}
-                      disabled={isLoading}
-                      className="w-full py-2.5 bg-[#172132] hover:bg-[#202d44] border border-[#2b3a55] text-slate-300 hover:text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-colors"
-                    >
-                      <Mail className="w-3.5 h-3.5 text-rose-400" />
-                      <span>অথবা Google জিমেইল দিয়ে ১-ক্লিকে সাইনআপ করুন</span>
-                    </button>
-                  </div>
                 </div>
               )}
 

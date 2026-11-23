@@ -267,17 +267,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const handlePasswordReset = async () => {
-    if (!email.trim()) {
+    const identifier = authMode === 'login' ? phoneNumber.trim() : email.trim();
+    if (!identifier) {
       setErrorMsg('পাসওয়ার্ড রিসেটের জন্য ইমেইল ঠিকানা লিখুন।');
       return;
     }
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      await requestPasswordReset(email);
+      const targetEmail = identifier.includes('@')
+        ? identifier.toLowerCase()
+        : (await backendApi.resolveLoginEmail(identifier)).email;
+      await requestPasswordReset(targetEmail);
       setSuccessMsg('পাসওয়ার্ড রিসেট লিংক আপনার ইমেইলে পাঠানো হয়েছে।');
     } catch {
-      setErrorMsg('রিসেট লিংক পাঠানো যায়নি। ইমেইল ঠিকানা যাচাই করুন।');
+      setErrorMsg('রিসেট লিংক পাঠানো যায়নি। ইমেইল/মোবাইল ঠিকানা যাচাই করুন।');
     } finally {
       setIsLoading(false);
     }

@@ -227,6 +227,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
+  const handleResendOtp = async () => {
+    if (!auth.currentUser) { setErrorMsg('আবার OTP পাঠাতে অ্যাকাউন্টটি পুনরায় খুলুন।'); return; }
+    setIsLoading(true); setErrorMsg(null);
+    try {
+      await backendApi.sendEmailOtp(email.trim().toLowerCase());
+      setSuccessMsg('নতুন ৬ সংখ্যার OTP ইমেইলে পাঠানো হয়েছে।');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'OTP আবার পাঠানো যায়নি।');
+    } finally { setIsLoading(false); }
+  };
+
   const handleVerifyEmailOtp = async () => {
     if (!/^\\d{6}$/.test(emailOtp) || !auth.currentUser) {
       setErrorMsg('ইমেইলে পাওয়া ৬ সংখ্যার OTP লিখুন।'); return;
@@ -684,6 +695,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     className="w-full rounded-xl bg-emerald-600 py-3 font-bold text-white disabled:opacity-50">
                     {isLoading ? 'যাচাই হচ্ছে...' : 'OTP যাচাই করুন'}
                   </button>
+                  <button type="button" onClick={handleResendOtp} disabled={isLoading}
+                    className="w-full py-2 text-xs font-semibold text-sky-300 disabled:opacity-50">আবার OTP পাঠান</button>
                 </div>
               )}
 

@@ -158,16 +158,15 @@ export async function signInWithEmail(
 }
 
 
-/** Create an email/password account and send Firebase's verification link. */
-export async function createVerifiedEmailAccount(email: string, pass: string, name?: string): Promise<void> {
+/** Create an email/password account; the backend sends the numeric email OTP. */
+export async function createVerifiedEmailAccount(email: string, pass: string, name?: string): Promise<FirebaseUser> {
   const normalizedEmail = email.trim().toLowerCase();
   const credential = await createUserWithEmailAndPassword(auth, normalizedEmail, pass);
   if (name?.trim()) await updateProfile(credential.user, { displayName: name.trim() });
-  await sendEmailVerification(credential.user, { url: window.location.origin, handleCodeInApp: false });
-  await signOut(auth);
+  return credential.user;
 }
 
-/** Sign in only after the Firebase email verification flag is refreshed. */
+/** Sign in only after the backend has marked the email verified. */
 export async function signInWithVerifiedEmail(email: string, pass: string): Promise<FirebaseUser> {
   const credential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), pass);
   await reload(credential.user);
@@ -175,20 +174,8 @@ export async function signInWithVerifiedEmail(email: string, pass: string): Prom
     await signOut(auth);
     throw new Error('EMAIL_NOT_VERIFIED');
   }
-  // Refresh the ID token so the server receives the updated email_verified claim.
   await credential.user.getIdToken(true);
   return credential.user;
-}
-
-export async function resendEmailVerification(email: string, pass: string): Promise<void> {
-  const credential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), pass);
-  await reload(credential.user);
-  if (credential.user.emailVerified) {
-    await signOut(auth);
-    throw new Error('EMAIL_ALREADY_VERIFIED');
-  }
-  await sendEmailVerification(credential.user, { url: window.location.origin, handleCodeInApp: false });
-  await signOut(auth);
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {

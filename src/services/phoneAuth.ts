@@ -248,17 +248,18 @@ async function getServerPhoneAccount(phone: string): Promise<{ user: AppUser; pr
   return { user, profile };
 }
 
-// New accounts use real email/password identities; phone is stored as a required profile field.
+// New accounts require email and a mobile number; only the email receives OTP.
 export async function registerPhoneAccount(
   email: string,
   rawPhone: string,
   pass: string,
   fullName?: string,
-  referralCodeInput?: string
+  _referralCodeInput?: string
 ): Promise<{ success: boolean; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
+  const normalizedEmail = email.trim().toLowerCase();
   if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
-  if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return { success: false, error: 'সঠিক ইমেইল ঠিকানা দিন।' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return { success: false, error: 'সঠিক ইমেইল ঠিকানা দিন।' };
   if (!pass || pass.length < 6) return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
 
   try {
@@ -268,9 +269,9 @@ export async function registerPhoneAccount(
     if (!deviceCheck.allowed) return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
 
     const { createVerifiedEmailAccount } = await import('./firebase');
-    await createVerifiedEmailAccount(email, pass, fullName);
+    await createVerifiedEmailAccount(normalizedEmail, pass, fullName);
+    await backendApi.sendEmailOtp(normalizedEmail);
     await recordAccountRegistrationOnDevice(cleanPhone);
-    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true };
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
@@ -281,29 +282,28 @@ export async function registerPhoneAccount(
 }
 
 export async function loginPhoneAccount(
-  email: string,
-  rawPhone: string,
+  identifier: string,
+  _rawPhone: string,
   pass: string,
   referralCodeInput?: string
 ): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
-  const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
   try {
+    const normalizedIdentifier = identifier.trim();
+    const email = normalizedIdentifier.includes('@')
+      ? normalizedIdentifier.toLowerCase()
+      : (await backendApi.resolveLoginEmail(normalizedIdentifier)).email;
     const { signInWithVerifiedEmail } = await import('./firebase');
     await signInWithVerifiedEmail(email, pass);
-    await backendApi.updateProfile({
-      phoneNumber: cleanPhone,
-      ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
-    });
-    const account = await getServerPhoneAccount(cleanPhone);
+    if (referralCodeInput?.trim()) await backendApi.updateProfile({ referralCode: referralCodeInput.trim() });
+    const account = await getServerPhoneAccount(normalizedIdentifier.includes('@') ? '' : normalizePhoneNumber(normalizedIdentifier).cleanPhone);
     try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true, ...account };
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
     if (err instanceof Error && err.message === 'EMAIL_NOT_VERIFIED') {
-      return { success: false, error: 'আপনার ইমেইল এখনো ভেরিফাই হয়নি। ইমেইলের লিংকে ক্লিক করুন, তারপর লগইন করুন।' };
+      return { success: false, error: 'আপনার ইমেইলে পাঠানো ৬ সংখ্যার OTP দিয়ে আগে যাচাই করুন।' };
     }
-    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') return { success: false, error: 'ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।' };
+    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') return { success: false, error: 'মোবাইল/ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।' };
     return { success: false, error: err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।' };
   }
 }

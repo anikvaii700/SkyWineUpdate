@@ -224,9 +224,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         soundManager.playWin();
         setSuccessMsg('মোবাইল নাম্বার দিয়ে লগইন সফল হয়েছে!');
         onLoginSuccess(res.user, res.profile);
-        setTimeout(() => {
-          onClose();
-        }, 500);
+        onClose();
       }
     } catch (err: unknown) {
       console.warn('Phone auth notice:', err);

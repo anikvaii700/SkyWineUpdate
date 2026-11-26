@@ -296,7 +296,7 @@ export async function loginPhoneAccount(
       if ((err as { code?: string }).code === 'NOT_FOUND' || (err as { code?: string }).code === 'USER_NOT_FOUND') return null;
       throw err;
     });
-    const existingPhone = existingProfile?.user.phoneNumber?.replace(/\\D/g, '') || '';
+    const existingPhone = existingProfile?.user.phoneNumber?.replace(/\D/g, '') || '';
     if (existingPhone && existingPhone !== cleanPhone) {
       await (await import('./firebase')).logoutUser();
       return { success: false, error: 'এই ইমেইল অ্যাকাউন্টের সঙ্গে অন্য মোবাইল নম্বর যুক্ত আছে।' };
@@ -311,7 +311,7 @@ export async function loginPhoneAccount(
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
     if (err instanceof Error && err.message === 'EMAIL_NOT_VERIFIED') {
-      return { success: false, error: 'আপনার ইমেইল এখনো ভেরিফাই হয়নি। ইমেইলের লিংকে ক্লিক করুন, তারপর লগইন করুন।' };
+      return { success: false, error: 'আপনার ইমেইল এখনো ভেরিফাই হয়নি। ইমেইলে পাঠানো ৬ সংখ্যার OTP দিয়ে ভেরিফাই করুন।' };
     }
     if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') return { success: false, error: 'ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।' };
     return { success: false, error: err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।' };

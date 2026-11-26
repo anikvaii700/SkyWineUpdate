@@ -202,8 +202,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           return;
         }
 
-        setSuccessMsg('অ্যাকাউন্ট তৈরি হয়েছে। আপনার ইমেইলে ভেরিফিকেশন লিংক পাঠানো হয়েছে। ইনবক্স/স্প্যাম ফোল্ডার দেখুন। লিংকে ক্লিক করার পর লগইন করুন।');
-        setAuthMode('login');
+        setOtpPending(true);
+        setSuccessMsg('আপনার ইমেইলে ৬ সংখ্যার OTP পাঠানো হয়েছে। কোডটি লিখে ইমেইল ভেরিফাই করুন।');
       } else {
         const res = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
         if (!res.success || !res.user || !res.profile) {

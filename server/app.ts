@@ -8,6 +8,7 @@ import { generalApiLimiter } from './middleware/rateLimit.ts';
 import { createAdminRouter } from './routes/admin.ts';
 import { createPublicRouter } from './routes/public.ts';
 import { createWalletRouter } from './routes/wallet.ts';
+import { createEmailOtpRouter } from './routes/emailOtp.ts';
 
 export interface CreateAppOptions {
   authDeps?: AuthMiddlewareDeps;

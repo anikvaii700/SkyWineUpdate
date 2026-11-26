@@ -79,6 +79,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // Form states
   const [email, setEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpPending, setOtpPending] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');

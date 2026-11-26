@@ -205,6 +205,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setSuccessMsg('আপনার ইমেইলে ৬ সংখ্যার OTP পাঠানো হয়েছে। কোডটি লিখে ইমেইল ভেরিফাই করুন।');
       } else {
         const res = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
+        if (res.requiresVerification) {
+          setOtpPending(true);
+          setSuccessMsg(res.error || 'ইমেইলে OTP পাঠানো হয়েছে।');
+          return;
+        }
         if (!res.success || !res.user || !res.profile) {
           setErrorMsg(res.error || 'লগইন ব্যর্থ হয়েছে।');
           return;

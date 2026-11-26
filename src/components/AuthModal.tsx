@@ -74,7 +74,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   noticeMessage,
 }) => {
   const [activeMethod, setActiveMethod] = useState<AuthMethod>('phone');
-  const [authMode, setAuthMode] = useState<AuthMode>('signup');
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
 
   // Form states
   const [email, setEmail] = useState('');

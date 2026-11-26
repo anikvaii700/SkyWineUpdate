@@ -261,17 +261,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     try {
       await backendApi.verifyEmailOtp(email.trim().toLowerCase(), otpCode.trim());
-      const login = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
-      if (!login.success || !login.user || !login.profile) {
-        setOtpPending(false);
-        setAuthMode('login');
-        setSuccessMsg('ইমেইল ভেরিফাই হয়েছে। এখন ইমেইল অথবা মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।');
-        return;
-      }
+      // Save the signup phone on the authenticated account before requiring a separate login.
+      const { cleanPhone } = normalizePhoneNumber(phoneNumber);
+      if (!/^01[0-9]{9}$/.test(cleanPhone)) throw new Error('সাইন-আপের মোবাইল নম্বরটি সঠিক নয়।');
+      await backendApi.updateProfile({ phoneNumber: cleanPhone });
+      await firebaseLogout();
       setOtpPending(false);
-      soundManager.playWin();
-      onLoginSuccess(login.user, login.profile);
-      onClose();
+      setOtpCode('');
+      setPassword('');
+      setConfirmPassword('');
+      setPhoneNumber('');
+      setAuthMode('login');
+      setSuccessMsg('সাইন-আপ সম্পন্ন। এখন ইমেইল অথবা মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'OTP যাচাই করা যায়নি।');
     } finally {

@@ -317,9 +317,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsSavingPhone(true);
     setErrorMsg(null);
     try {
-      if (currentUser.provider === 'google') {
-        await backendApi.updateProfile({ phoneNumber: cleanPhone });
-      }
+      await backendApi.updateProfile({ phoneNumber: cleanPhone });
       if (userProfile) {
         userProfile.phoneNumber = cleanPhone;
       }

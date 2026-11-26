@@ -694,6 +694,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </p>
                   </div>
 
+                  {otpPending ? (
+                    <div className="space-y-3 rounded-2xl border border-emerald-700/40 bg-[#0b0e15] p-4">
+                      <div className="text-center text-sm font-bold text-white">ইমেইল OTP যাচাই</div>
+                      <p className="text-center text-xs text-slate-300">{email} ঠিকানায় পাঠানো ৬ সংখ্যার কোডটি লিখুন। কোড ১০ মিনিট কার্যকর থাকবে।</p>
+                      <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="৬ সংখ্যার OTP" className="w-full rounded-xl border border-[#232f44] bg-[#0d121c] px-3 py-3 text-center text-xl tracking-[0.5em] text-white" />
+                      <button type="button" onClick={handleVerifyOtp} disabled={isLoading || otpCode.length !== 6} className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white disabled:opacity-50">{isLoading ? 'যাচাই হচ্ছে...' : 'OTP যাচাই করুন'}</button>
+                      <button type="button" onClick={handleResendVerification} disabled={isLoading} className="w-full py-2 text-xs text-amber-300">আবার OTP পাঠান</button>
+                    </div>
+                  ) : (
                   <form onSubmit={handlePhoneSubmit} className="space-y-3">
                     {authMode === 'signup' && (
                       <div>
@@ -860,6 +869,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </span>
                     </button>
                   </form>
+                  )}
 
                 </div>
               )}

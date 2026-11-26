@@ -92,6 +92,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const { requireAuth, requireAdmin } = createAuthMiddleware(options.authDeps);
 
   app.use('/api', createPublicRouter());
+  app.use('/api', createEmailOtpRouter());
   app.use('/api', createWalletRouter(requireAuth));
   app.use('/api/admin', requireAuth, requireAdmin, createAdminRouter());
 

@@ -33,10 +33,12 @@ export function captureReferralCodeFromUrl(): string | null {
     const raw = params.get('ref') || params.get('invite') || params.get('code');
     if (raw && raw.trim().length >= 3) {
       const clean = raw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-      if (clean.length >= 3) {
+      // Referral codes are not mobile numbers. Ignore stale ?ref= phone values.
+      if (clean.length >= 3 && !/^01[0-9]{9}$/.test(clean) && !/^8801[0-9]{9}$/.test(clean)) {
         localStorage.setItem(PENDING_REF_STORAGE_KEY, clean);
         return clean;
       }
+      localStorage.removeItem(PENDING_REF_STORAGE_KEY);
     }
   } catch (e) {
     console.warn('Could not read referral query param:', e);
@@ -52,7 +54,12 @@ export function getPendingReferralCode(): string {
   try {
     const fromUrl = captureReferralCodeFromUrl();
     if (fromUrl) return fromUrl;
-    return localStorage.getItem(PENDING_REF_STORAGE_KEY) || '';
+    const stored = (localStorage.getItem(PENDING_REF_STORAGE_KEY) || '').trim().toUpperCase();
+    if (/^01[0-9]{9}$/.test(stored) || /^8801[0-9]{9}$/.test(stored)) {
+      localStorage.removeItem(PENDING_REF_STORAGE_KEY);
+      return '';
+    }
+    return stored;
   } catch {
     return '';
   }

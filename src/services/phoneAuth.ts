@@ -267,8 +267,9 @@ export async function registerPhoneAccount(
     const deviceCheck = await canRegisterNewAccountOnDevice(cleanPhone);
     if (!deviceCheck.allowed) return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
 
-    const { createVerifiedEmailAccount } = await import('./firebase');
-    await createVerifiedEmailAccount(email, pass, fullName);
+    const { createEmailPasswordAccount } = await import('./firebase');
+    await createEmailPasswordAccount(email, pass, fullName);
+    await backendApi.sendEmailOtp(email.trim().toLowerCase());
     await recordAccountRegistrationOnDevice(cleanPhone);
     try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true };

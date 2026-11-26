@@ -291,9 +291,18 @@ export async function loginPhoneAccount(
   if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
   try {
     const { signInWithVerifiedEmail } = await import('./firebase');
-    await signInWithVerifiedEmail(email, pass);
+    const firebaseUser = await signInWithVerifiedEmail(email, pass);
+    const existingProfile = await backendApi.getMe().catch((err) => {
+      if ((err as { code?: string }).code === 'NOT_FOUND' || (err as { code?: string }).code === 'USER_NOT_FOUND') return null;
+      throw err;
+    });
+    const existingPhone = existingProfile?.user.phoneNumber?.replace(/\\D/g, '') || '';
+    if (existingPhone && existingPhone !== cleanPhone) {
+      await (await import('./firebase')).logoutUser();
+      return { success: false, error: 'এই ইমেইল অ্যাকাউন্টের সঙ্গে অন্য মোবাইল নম্বর যুক্ত আছে।' };
+    }
     await backendApi.updateProfile({
-      phoneNumber: cleanPhone,
+      ...(!existingPhone ? { phoneNumber: cleanPhone } : {}),
       ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
     });
     const account = await getServerPhoneAccount(cleanPhone);

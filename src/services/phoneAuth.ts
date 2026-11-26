@@ -286,12 +286,28 @@ export async function loginPhoneAccount(
   rawPhone: string,
   pass: string,
   referralCodeInput?: string
-): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
+): Promise<{ success: boolean; requiresVerification?: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
   if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
   try {
-    const { signInWithVerifiedEmail } = await import('./firebase');
-    const firebaseUser = await signInWithVerifiedEmail(email, pass);
+    const { signInWithVerifiedEmail, migrateLegacyPhoneAccountToEmail } = await import('./firebase');
+    let firebaseUser;
+    try {
+      firebaseUser = await signInWithVerifiedEmail(email, pass);
+    } catch (emailLoginError) {
+      const code = (emailLoginError as { code?: string })?.code || '';
+      if (!['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(code)) throw emailLoginError;
+      try {
+        await migrateLegacyPhoneAccountToEmail(cleanPhone, pass, email);
+        await backendApi.sendEmailOtp(email.trim().toLowerCase());
+        return { success: false, requiresVerification: true, error: 'পুরোনো অ্যাকাউন্টটি একইভাবে সংরক্ষণ করে ইমেইল যুক্ত করা হয়েছে। ইমেইলে পাঠানো OTP দিয়ে ভেরিফাই করুন।' };
+      } catch (migrationError) {
+        const migrationCode = (migrationError as { code?: string })?.code || '';
+        if (migrationCode === 'auth/email-already-in-use') return { success: false, error: 'এই ইমেইলটি অন্য Firebase অ্যাকাউন্টে যুক্ত আছে। পুরোনো ওয়ালেট নিরাপদে যুক্ত করতে সহায়তা প্রয়োজন; নতুন অ্যাকাউন্ট খুলবেন না।' };
+        if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(migrationCode)) return { success: false, error: 'পুরোনো মোবাইল অ্যাকাউন্টের পাসওয়ার্ড সঠিক নয়।' };
+        throw migrationError;
+      }
+    }
     const existingProfile = await backendApi.getMe().catch((err) => {
       if ((err as { code?: string }).code === 'NOT_FOUND' || (err as { code?: string }).code === 'USER_NOT_FOUND') return null;
       throw err;

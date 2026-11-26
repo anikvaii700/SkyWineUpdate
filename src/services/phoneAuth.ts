@@ -323,11 +323,13 @@ export async function loginPhoneAccount(
       throw err;
     });
     const existingPhone = existingProfile?.user.phoneNumber?.replace(/\D/g, '') || '';
+    const suppliedPhone = normalizePhoneNumber(rawPhone).cleanPhone;
+    const phoneToSave = /^01[0-9]{9}$/.test(suppliedPhone) ? suppliedPhone : cleanPhone;
     await backendApi.updateProfile({
-      ...(!existingPhone && /^01[0-9]{9}$/.test(cleanPhone) ? { phoneNumber: cleanPhone } : {}),
+      ...(!existingPhone && /^01[0-9]{9}$/.test(phoneToSave) ? { phoneNumber: phoneToSave } : {}),
       ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
     });
-    const account = await getServerPhoneAccount(cleanPhone);
+    const account = await getServerPhoneAccount(phoneToSave);
     try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true, ...account };
   } catch (err) {

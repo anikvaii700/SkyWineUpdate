@@ -11,6 +11,22 @@ export const generalApiLimiter = rateLimit({
   },
 });
 
+export const emailOtpSendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many OTP requests. Please wait before trying again.', code: 'OTP_RATE_LIMITED' },
+});
+
+export const emailOtpVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 15,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many OTP verification attempts. Please wait.', code: 'OTP_RATE_LIMITED' },
+});
+
 export const financialMutationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 25,

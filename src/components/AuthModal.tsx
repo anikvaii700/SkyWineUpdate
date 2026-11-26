@@ -227,19 +227,37 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const handleResendVerification = async () => {
-    if (!email.trim() || !password) {
-      setErrorMsg('ভেরিফিকেশন লিংক পাঠাতে ইমেইল ও পাসওয়ার্ড দিন।');
+    if (!email.trim()) {
+      setErrorMsg('OTP পাঠাতে ইমেইল ঠিকানা দিন।');
       return;
     }
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      await resendEmailVerification(email, password);
-      setSuccessMsg('নতুন ভেরিফিকেশন লিংক আপনার ইমেইলে পাঠানো হয়েছে।');
+      await backendApi.sendEmailOtp(email.trim().toLowerCase());
+      setOtpPending(true);
+      setSuccessMsg('নতুন ৬ সংখ্যার OTP পাঠানো হয়েছে।');
     } catch (err) {
-      setErrorMsg(err instanceof Error && err.message === 'EMAIL_ALREADY_VERIFIED'
-        ? 'এই ইমেইল ইতোমধ্যে ভেরিফাই করা হয়েছে। লগইন করুন।'
-        : 'ভেরিফিকেশন লিংক পাঠানো যায়নি। ইমেইল ও পাসওয়ার্ড যাচাই করুন।');
+      setErrorMsg(err instanceof Error ? err.message : 'OTP পাঠানো যায়নি।');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!/^\\d{6}$/.test(otpCode.trim())) {
+      setErrorMsg('৬ সংখ্যার OTP লিখুন।');
+      return;
+    }
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      await backendApi.verifyEmailOtp(email.trim().toLowerCase(), otpCode.trim());
+      setOtpPending(false);
+      setAuthMode('login');
+      setSuccessMsg('ইমেইল সফলভাবে ভেরিফাই হয়েছে। এখন লগইন করুন।');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'OTP যাচাই করা যায়নি।');
     } finally {
       setIsLoading(false);
     }

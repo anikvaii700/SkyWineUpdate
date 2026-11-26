@@ -7,6 +7,7 @@ import {
   onAuthStateChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signInWithCustomToken,
   updateEmail,
   updateProfile,
   sendPasswordResetEmail,
@@ -157,6 +158,12 @@ export async function signInWithEmail(
   return userCredential.user;
 }
 
+
+/** Sign in using a short-lived custom token issued after server-side phone/password verification. */
+export async function signInWithPhoneCustomToken(token: string): Promise<FirebaseUser> {
+  const credential = await signInWithCustomToken(auth, token);
+  return credential.user;
+}
 
 /** Create an email/password account and send Firebase's verification link. */
 export async function createEmailPasswordAccount(email: string, pass: string, name?: string): Promise<void> {

@@ -83,7 +83,12 @@ export async function sendEmailVerificationOtp(rawEmail: string): Promise<void> 
   });
   if (!saved) throw new HttpError(429, 'OTP_COOLDOWN', 'Please wait 60 seconds before requesting another code.');
 
-  await sendWithResend(email, code);
+  try {
+    await sendWithResend(email, code);
+  } catch (err) {
+    await query('DELETE FROM email_verification_otps WHERE email = $1', [email]);
+    throw err;
+  }
 }
 
 export async function verifyEmailVerificationOtp(rawEmail: string, rawCode: string): Promise<void> {

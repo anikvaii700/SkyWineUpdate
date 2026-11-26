@@ -19,6 +19,7 @@ export default defineConfig(() => {
           'pwa-maskable-192x192.png',
           'pwa-maskable-512x512.png',
           'assets/aistudio/SkyWinBD_Airborne_Logo_0dd77831.webp',
+          'audio/skywin-aviator-music.mp3',
         ],
         manifest: {
           id: '/',
@@ -60,7 +61,7 @@ export default defineConfig(() => {
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2,mp3}'],
           // API responses must never be cached or replaced by the SPA navigation fallback.
           // Leaving /api/* out of runtimeCaching ensures the Service Worker passes them straight to the browser.
           navigateFallbackDenylist: [/^\/api\//],

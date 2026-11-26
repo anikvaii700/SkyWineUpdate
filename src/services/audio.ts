@@ -1,10 +1,139 @@
-// Synthesized Web Audio API Sound Effects for Aviator & Casino
+// Synthesized Web Audio API Sound Effects + Aviator MP3 Background Music
+
+const AVIATOR_MUSIC_SRC = '/audio/skywin-aviator-music.mp3';
+const AVIATOR_MUSIC_VOLUME = 0.45;
+
+type PlayableAudioElement = HTMLAudioElement & { playsInline?: boolean };
 
 class SoundManager {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
   private engineOscillator: OscillatorNode | null = null;
   private engineGain: GainNode | null = null;
+
+  // Single-instance looping background music state
+  private bgmAudio: PlayableAudioElement | null = null;
+  private bgmDesiredActive: boolean = false;
+  private bgmPlayPending: boolean = false;
+  private hasUserInteracted: boolean = false;
+  private isPageHidden: boolean = false;
+  private lifecycleBound: boolean = false;
+
+  constructor() {
+    this.bindLifecycleListeners();
+  }
+
+  private bindLifecycleListeners() {
+    if (this.lifecycleBound || typeof window === 'undefined' || typeof document === 'undefined') {
+      return;
+    }
+    this.lifecycleBound = true;
+    this.isPageHidden = document.hidden;
+
+    const handleUserGesture = () => {
+      this.hasUserInteracted = true;
+      if (!this.isMuted && this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+      this.syncBgmPlayback();
+    };
+
+    const handleVisibilityChange = () => {
+      this.isPageHidden = document.hidden;
+      this.syncBgmPlayback();
+    };
+
+    const handlePageHide = () => {
+      this.isPageHidden = true;
+      this.pauseBgm();
+    };
+
+    const handlePageShow = () => {
+      this.isPageHidden = document.hidden;
+      this.syncBgmPlayback();
+    };
+
+    // Bubble-phase listeners run after React's onClick so muting on the first tap never triggers a blip.
+    window.addEventListener('click', handleUserGesture, { passive: true });
+    window.addEventListener('touchend', handleUserGesture, { passive: true });
+    window.addEventListener('keydown', handleUserGesture, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('pageshow', handlePageShow);
+  }
+
+  private ensureBgmAudio(): PlayableAudioElement | null {
+    if (typeof window === 'undefined' || typeof Audio === 'undefined') {
+      return null;
+    }
+    if (!this.bgmAudio) {
+      const audio = new Audio(AVIATOR_MUSIC_SRC) as PlayableAudioElement;
+      audio.loop = true;
+      audio.preload = 'auto';
+      audio.volume = AVIATOR_MUSIC_VOLUME;
+      audio.playsInline = true;
+      audio.muted = this.isMuted;
+      this.bgmAudio = audio;
+    }
+    return this.bgmAudio;
+  }
+
+  private pauseBgm() {
+    if (!this.bgmAudio) return;
+    try {
+      this.bgmAudio.muted = this.isMuted;
+      if (!this.bgmAudio.paused) {
+        this.bgmAudio.pause();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private syncBgmPlayback() {
+    this.bindLifecycleListeners();
+
+    if (!this.bgmDesiredActive || this.isMuted || this.isPageHidden) {
+      this.pauseBgm();
+      return;
+    }
+
+    if (!this.hasUserInteracted) {
+      return;
+    }
+
+    const audio = this.ensureBgmAudio();
+    if (!audio) return;
+
+    audio.loop = true;
+    audio.volume = AVIATOR_MUSIC_VOLUME;
+    audio.muted = false;
+
+    if (!audio.paused || this.bgmPlayPending) {
+      return;
+    }
+
+    this.bgmPlayPending = true;
+    try {
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise
+          .then(() => {
+            this.bgmPlayPending = false;
+            if (!this.bgmDesiredActive || this.isMuted || this.isPageHidden) {
+              this.pauseBgm();
+            }
+          })
+          .catch(() => {
+            this.bgmPlayPending = false;
+          });
+      } else {
+        this.bgmPlayPending = false;
+      }
+    } catch {
+      this.bgmPlayPending = false;
+    }
+  }
 
   private initContext() {
     if (!this.ctx && typeof window !== 'undefined') {
@@ -22,11 +151,41 @@ class SoundManager {
     this.isMuted = muted;
     if (muted) {
       this.stopEngineSound();
+      this.pauseBgm();
+    } else {
+      this.hasUserInteracted = true;
+      this.syncBgmPlayback();
     }
   }
 
   public getMuted(): boolean {
     return this.isMuted;
+  }
+
+  public setAviatorMusicActive(active: boolean) {
+    this.bgmDesiredActive = active;
+    if (active) {
+      this.syncBgmPlayback();
+    } else {
+      this.pauseBgm();
+    }
+  }
+
+  public stopAllMusic() {
+    this.bgmDesiredActive = false;
+    this.pauseBgm();
+    if (this.bgmAudio) {
+      try {
+        this.bgmAudio.currentTime = 0;
+      } catch {
+        // ignore
+      }
+    }
+    this.stopEngineSound();
+  }
+
+  public isAviatorMusicPlaying(): boolean {
+    return Boolean(this.bgmAudio && !this.bgmAudio.paused && !this.isMuted);
   }
 
   // Button click / chip select
@@ -82,49 +241,15 @@ class SoundManager {
     }
   }
 
-  // Engine propeller sound that revs up during flight
+  // Kept for backward compatibility: ensures the Aviator MP3 background loop stays playing when Aviator is active
   public startEngineSound() {
-    if (this.isMuted) return;
-    try {
-      this.initContext();
-      if (!this.ctx) return;
-
-      this.stopEngineSound();
-
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(110, this.ctx.currentTime);
-
-      // Low pass filter to make it sound like a rumble propeller
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(280, this.ctx.currentTime);
-
-      gain.gain.setValueAtTime(0.03, this.ctx.currentTime);
-
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start();
-      this.engineOscillator = osc;
-      this.engineGain = gain;
-    } catch {
-      // ignore
+    if (this.bgmDesiredActive) {
+      this.syncBgmPlayback();
     }
   }
 
-  public updateEnginePitch(multiplier: number) {
-    if (!this.engineOscillator || !this.ctx || this.isMuted) return;
-    try {
-      // Pitch goes up smoothly from 110Hz to 400Hz based on multiplier
-      const targetFreq = Math.min(500, 110 + Math.log(multiplier) * 90);
-      this.engineOscillator.frequency.setTargetAtTime(targetFreq, this.ctx.currentTime, 0.1);
-    } catch {
-      // ignore
-    }
+  public updateEnginePitch(_multiplier: number) {
+    // No-op: replaced synthesized propeller pitch ramp with looping MP3 background music
   }
 
   public stopEngineSound() {

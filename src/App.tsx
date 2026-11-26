@@ -1602,6 +1602,25 @@ export default function App() {
   // Check active account suspension status (Requirement 3: Temporary suspension or Permanent ban)
   const suspensionInfo = checkAccountSuspensionStatus(userProfile || currentUser);
 
+  // Sync Aviator MP3 background music with active game tab, overlays, and mute state
+  const isAviatorAudioEligible =
+    activeGameTab === 'AVIATOR' &&
+    appControls.aviatorEnabled &&
+    !showSplash &&
+    !isAppClosed &&
+    !(appControls.maintenanceMode && currentUser?.isAdmin !== true) &&
+    !(currentUser && suspensionInfo.isDeactivated);
+
+  useEffect(() => {
+    soundManager.setAviatorMusicActive(isAviatorAudioEligible);
+  }, [isAviatorAudioEligible]);
+
+  useEffect(() => {
+    return () => {
+      soundManager.stopAllMusic();
+    };
+  }, []);
+
   const handleLogoutAccount = useCallback(() => {
     soundManager.playClick();
     logoutPhoneSession();
@@ -1811,7 +1830,7 @@ export default function App() {
   // Complete Direct Exit: Closes app and returns straight to mobile's default home screen without looping
   const handleExitApp = useCallback(() => {
     isExitingRef.current = true;
-    soundManager.stopEngineSound();
+    soundManager.stopAllMusic();
     setIsExitModalOpen(false);
     setBackPressToast(null);
 

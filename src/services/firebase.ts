@@ -7,6 +7,7 @@ import {
   onAuthStateChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  updateEmail,
   updateProfile,
   sendPasswordResetEmail,
   reload,
@@ -176,6 +177,15 @@ export async function signInWithVerifiedEmail(email: string, pass: string): Prom
   // Refresh the ID token so the server receives the updated email_verified claim.
   await credential.user.getIdToken(true);
   return credential.user;
+}
+
+/** Sign in to a legacy phone-alias account and migrate its Firebase Auth email without changing its UID. */
+export async function migrateLegacyPhoneAccountToEmail(phone: string, pass: string, email: string): Promise<void> {
+  const { authEmail } = formatPhoneNumber(phone);
+  const normalizedEmail = email.trim().toLowerCase();
+  const credential = await signInWithEmailAndPassword(auth, authEmail, pass);
+  if (credential.user.email?.toLowerCase() !== normalizedEmail) await updateEmail(credential.user, normalizedEmail);
+  await signOut(auth);
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {

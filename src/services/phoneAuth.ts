@@ -281,8 +281,24 @@ export async function loginPhoneAccount(
   pass: string,
   referralCodeInput?: string
 ): Promise<{ success: boolean; requiresVerification?: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
-  const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
+  const identifier = email.trim();
+  const { cleanPhone } = normalizePhoneNumber(identifier);
+  const isPhoneLogin = /^01[0-9]{9}$/.test(cleanPhone);
+  if (!isPhoneLogin && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
+    return { success: false, error: 'সঠিক ইমেইল অথবা ১১ ডিজিটের মোবাইল নম্বর দিন।' };
+  }
+  if (isPhoneLogin) {
+    try {
+      const { customToken } = await backendApi.phoneLogin(cleanPhone, pass);
+      const { signInWithPhoneCustomToken } = await import('./firebase');
+      await signInWithPhoneCustomToken(customToken);
+      const account = await getServerPhoneAccount(cleanPhone);
+      try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+      return { success: true, ...account };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।' };
+    }
+  }
   try {
     const { signInWithVerifiedEmail, migrateLegacyPhoneAccountToEmail } = await import('./firebase');
     let firebaseUser;

@@ -1,7 +1,7 @@
 import { UserWalletProfile, db, signUpWithPhone, signInWithPhone, logoutUser } from './firebase';
 import { backendApi, mapBackendMeToProfile } from './backendApi';
 import { doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
-import { canRegisterNewAccountOnDevice, recordAccountRegistrationOnDevice } from './deviceSecurity';
+import { recordAccountRegistrationOnDevice } from './deviceSecurity';
 
 export interface AppUser {
   uid: string;
@@ -262,15 +262,9 @@ export async function registerPhoneAccount(
   if (!pass || pass.length < 6) return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
 
   try {
-    const { getStoredAppControls } = await import('./appControlService');
-    if (!getStoredAppControls().registrationEnabled) return { success: false, error: 'নতুন অ্যাকাউন্ট রেজিস্ট্রেশন সাময়িকভাবে বন্ধ আছে।' };
-    const deviceCheck = await canRegisterNewAccountOnDevice(cleanPhone);
-    if (!deviceCheck.allowed) return { success: false, error: deviceCheck.reason || 'এই ডিভাইসে নতুন অ্যাকাউন্ট তৈরির সীমা পূর্ণ হয়েছে।' };
-
     const { createEmailPasswordAccount } = await import('./firebase');
     await createEmailPasswordAccount(email, pass, fullName);
     await backendApi.sendEmailOtp(email.trim().toLowerCase());
-    await recordAccountRegistrationOnDevice(cleanPhone);
     try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true };
   } catch (err) {

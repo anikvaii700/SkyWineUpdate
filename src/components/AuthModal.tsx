@@ -788,7 +788,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           পাসওয়ার্ড ভুলে গেছেন?
                         </button>
                         <button type="button" onClick={handleResendVerification} disabled={isLoading} className="text-amber-400 hover:text-amber-300">
-                          ভেরিফিকেশন লিংক আবার পাঠান
+                          OTP আবার পাঠান
                         </button>
                       </div>
                     )}

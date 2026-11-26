@@ -261,9 +261,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     try {
       await backendApi.verifyEmailOtp(email.trim().toLowerCase(), otpCode.trim());
+      const login = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
+      if (!login.success || !login.user || !login.profile) {
+        setOtpPending(false);
+        setAuthMode('login');
+        setSuccessMsg('ইমেইল ভেরিফাই হয়েছে। এখন ইমেইল অথবা মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।');
+        return;
+      }
       setOtpPending(false);
-      setAuthMode('login');
-      setSuccessMsg('ইমেইল সফলভাবে ভেরিফাই হয়েছে। এখন লগইন করুন।');
+      soundManager.playWin();
+      onLoginSuccess(login.user, login.profile);
+      onClose();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'OTP যাচাই করা যায়নি।');
     } finally {

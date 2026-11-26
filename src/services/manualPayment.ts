@@ -223,6 +223,8 @@ export function subscribeToPaymentSettings(
         window.dispatchEvent(new CustomEvent('payment_settings_updated', { detail: merged }));
         callback(merged);
       }
+    }, (err) => {
+      console.warn('subscribeToPaymentSettings snapshot error:', err);
     });
   } catch (err) {
     console.warn('subscribeToPaymentSettings error:', err);

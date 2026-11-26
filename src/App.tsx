@@ -39,15 +39,17 @@ import {
 import confetti from 'canvas-confetti';
 import {
   getStoredPaymentSettings,
+  syncPaymentSettingsFromFirestore,
   SystemPaymentSettings,
 } from './services/manualPayment';
 import { soundManager } from './services/audio';
-import { backendApi, mapBackendMeToProfile } from './services/backendApi';
+import { ApiClientError, backendApi, mapBackendMeToProfile } from './services/backendApi';
 import { Language, translations } from './utils/i18n';
 import { auth, UserWalletProfile } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   AppUser,
+  buildFirestoreFallbackSession,
   checkAccountSuspensionStatus,
   logoutPhoneSession,
 } from './services/phoneAuth';
@@ -462,6 +464,8 @@ export default function App() {
           const me = await backendApi.getMe();
           const profile = mapBackendMeToProfile(me, user);
           const isPhoneAlias = /^user_01[0-9]{9}@phone\.aviator\.bd$/i.test(user.email || '');
+          const isFacebookProvider = user.providerData?.some((p) => p.providerId === 'facebook.com') ?? false;
+          const isGoogleProvider = user.providerData?.some((p) => p.providerId === 'google.com') ?? false;
           const appUser: AppUser = {
             uid: user.uid,
             userCode: me.user.userCode,
@@ -470,7 +474,7 @@ export default function App() {
             email: user.email,
             phoneNumber: me.user.phoneNumber || user.phoneNumber || null,
             photoURL: user.photoURL,
-            provider: isPhoneAlias ? 'phone' : 'google',
+            provider: isPhoneAlias ? 'phone' : isFacebookProvider ? 'facebook' : isGoogleProvider ? 'google' : 'email',
             isAdmin: me.user.isAdmin === true,
             status: me.user.status as AppUser['status'],
           };
@@ -485,6 +489,24 @@ export default function App() {
           setUserProfile(profile);
           setBalance(restoredBalance);
         } catch (err) {
+          if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+            try {
+              const fallback = await buildFirestoreFallbackSession(user);
+              const restoredBalance = Math.max(
+                0,
+                Math.round((fallback.profile.balance + getLocalWalletAdjustment(user.uid)) * 100) / 100
+              );
+              currentUserRef.current = fallback.user;
+              serverWalletBalanceRef.current = fallback.profile.balance;
+              balanceRef.current = restoredBalance;
+              setCurrentUser(fallback.user);
+              setUserProfile(fallback.profile);
+              setBalance(restoredBalance);
+              return;
+            } catch (fallbackErr) {
+              console.error('Firestore fallback profile load failed:', fallbackErr);
+            }
+          }
           console.error('Could not load authenticated server profile:', err);
           setCurrentUser(null);
           setUserProfile(null);
@@ -551,7 +573,7 @@ export default function App() {
     };
 
     const updatePendingCount = () => {
-      if (currentUser?.isAdmin !== true) {
+      if (currentUser?.isAdmin !== true || !auth.currentUser) {
         setPendingDepositCount(0);
         return;
       }
@@ -641,9 +663,10 @@ export default function App() {
     };
   }, [currentUser]);
 
-  // Load public payment/support settings through the server API, never Firestore.
+  // Load public payment/support settings through the server API, falling back to Firestore on NETWORK_ERROR.
   useEffect(() => {
     let cancelled = false;
+    let isSyncingFromFirestore = false;
     const refreshPublicSettings = async () => {
       try {
         const result = await backendApi.getPublicConfig();
@@ -651,11 +674,31 @@ export default function App() {
         const config = result.paymentSettings as Partial<SystemPaymentSettings>;
         setSystemSettings((previous) => ({ ...previous, ...config }));
       } catch (err) {
+        if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+          isSyncingFromFirestore = true;
+          try {
+            const synced = await syncPaymentSettingsFromFirestore().catch(() => null);
+            if (!cancelled && synced) {
+              setSystemSettings((previous) => ({ ...previous, ...synced }));
+            }
+          } finally {
+            isSyncingFromFirestore = false;
+          }
+          return;
+        }
         console.warn('Public payment settings could not be loaded:', err);
       }
     };
     void refreshPublicSettings();
-    const handleSettingsUpdated = () => void refreshPublicSettings();
+    const handleSettingsUpdated = (e: Event) => {
+      if (isSyncingFromFirestore) return;
+      const detail = (e as CustomEvent<Partial<SystemPaymentSettings>>).detail;
+      if (detail && typeof detail === 'object') {
+        setSystemSettings((previous) => ({ ...previous, ...detail }));
+        return;
+      }
+      void refreshPublicSettings();
+    };
     window.addEventListener('payment_settings_updated', handleSettingsUpdated);
     return () => {
       cancelled = true;
@@ -754,7 +797,9 @@ export default function App() {
         setUserProfile(mapBackendMeToProfile(me, auth.currentUser));
         initialLoad = false;
       } catch (err) {
-        if (!cancelled) console.warn('Server wallet refresh failed:', err);
+        if (!cancelled && !(err instanceof ApiClientError && err.code === 'NETWORK_ERROR')) {
+          console.warn('Server wallet refresh failed:', err);
+        }
       } finally {
         running = false;
       }
@@ -2125,9 +2170,6 @@ export default function App() {
         onResetBalance={() => {
           updateBalanceAndSync(() => 0);
         }}
-        onUpdatePhone={(phone) => {
-          setUserProfile((p) => (p ? { ...p, phoneNumber: phone } : null));
-        }}
         onOpenInstallModal={() => setIsInstallModalOpen(true)}
       />
 
@@ -2140,7 +2182,11 @@ export default function App() {
           if (!auth.currentUser) return;
           void backendApi.getMe()
             .then((me) => setUserProfile(mapBackendMeToProfile(me, auth.currentUser)))
-            .catch((err) => console.warn('Wallet profile refresh failed:', err));
+            .catch((err) => {
+              if (!(err instanceof ApiClientError && err.code === 'NETWORK_ERROR')) {
+                console.warn('Wallet profile refresh failed:', err);
+              }
+            });
         }}
       />
 

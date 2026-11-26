@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { env } from '../config/env.ts';
-import { checkDatabaseHealth, isDatabaseConfigured } from '../db/pool.ts';
+import { checkDatabaseHealth } from '../db/pool.ts';
 import { getPublicPaymentSettings } from '../services/walletLedger.ts';
 
 export function createPublicRouter(): Router {
@@ -23,13 +23,6 @@ export function createPublicRouter(): Router {
 
   router.get('/public/config', async (_req, res, next) => {
     try {
-      if (!isDatabaseConfigured()) {
-        res.status(503).json({
-          error: 'Database is not configured yet.',
-          code: 'DATABASE_UNAVAILABLE',
-        });
-        return;
-      }
       const paymentSettings = await getPublicPaymentSettings();
       res.json({ paymentSettings });
     } catch (err) {

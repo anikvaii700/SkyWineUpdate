@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
+  FacebookAuthProvider,
   signInWithPopup,
   signOut,
   onAuthStateChanged,
@@ -31,6 +32,8 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+export const facebookProvider = new FacebookAuthProvider();
+facebookProvider.addScope('email');
 
 // Test connection on boot according to skill guideline
 export async function testFirestoreConnection() {
@@ -95,6 +98,17 @@ export async function signInWithGoogle(): Promise<FirebaseUser | null> {
   }
 }
 
+// User sign-in with Facebook popup
+export async function signInWithFacebook(): Promise<FirebaseUser | null> {
+  try {
+    const result = await signInWithPopup(auth, facebookProvider);
+    return result.user;
+  } catch (err) {
+    console.error('Error signing in with Facebook:', err);
+    throw err;
+  }
+}
+
 // Format and normalize phone numbers for auth and display
 export function formatPhoneNumber(phone: string): { cleanPhone: string; authEmail: string; displayPhone: string } {
   let clean = phone.replace(/[^0-9]/g, '');
@@ -140,12 +154,12 @@ export async function signUpWithEmail(
   pass: string,
   name?: string
 ): Promise<FirebaseUser> {
-  const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), pass);
-  const displayName = name?.trim() || email.split('@')[0];
+  const normalizedEmail = email.trim().toLowerCase();
+  const userCredential = await createUserWithEmailAndPassword(auth, normalizedEmail, pass);
+  const displayName = name?.trim() || normalizedEmail.split('@')[0];
   await updateProfile(userCredential.user, {
     displayName,
   });
-  await getOrCreateUserProfile(userCredential.user, 0, '', displayName);
   return userCredential.user;
 }
 
@@ -154,7 +168,8 @@ export async function signInWithEmail(
   email: string,
   pass: string
 ): Promise<FirebaseUser> {
-  const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
+  const normalizedEmail = email.trim().toLowerCase();
+  const userCredential = await signInWithEmailAndPassword(auth, normalizedEmail, pass);
   return userCredential.user;
 }
 

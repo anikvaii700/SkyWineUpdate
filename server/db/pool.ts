@@ -2,8 +2,17 @@ import { Pool } from 'pg';
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { env } from '../config/env.ts';
 import { HttpError } from '../middleware/errorHandler.ts';
+import { runInMemoryQuery, runInMemoryTransaction } from './inMemoryFallback.ts';
 
 let pool: Pool | null = null;
+let loggedFallback = false;
+
+function warnInMemoryFallback() {
+  if (!loggedFallback) {
+    loggedFallback = true;
+    console.warn('[DB Pool] DATABASE_URL not set — using in-memory fallback store (data resets on restart).');
+  }
+}
 
 function shouldUseSsl(connectionString: string): boolean {
   try {
@@ -53,6 +62,10 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params: readonly unknown[] = []
 ): Promise<QueryResult<T>> {
+  if (!isDatabaseConfigured()) {
+    warnInMemoryFallback();
+    return runInMemoryQuery<T>(text, params);
+  }
   const activePool = getPool();
   return activePool.query<T>(text, params as unknown[]);
 }
@@ -60,6 +73,10 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
 export async function withTransaction<T>(
   callback: (client: PoolClient) => Promise<T>
 ): Promise<T> {
+  if (!isDatabaseConfigured()) {
+    warnInMemoryFallback();
+    return runInMemoryTransaction(callback);
+  }
   const activePool = getPool();
   const client = await activePool.connect();
   try {

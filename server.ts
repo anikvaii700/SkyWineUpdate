@@ -26,8 +26,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: !hmrDisabled,
-        ws: { server: httpServer },
+        hmr: hmrDisabled ? false : { server: httpServer },
       },
       appType: 'spa',
     });

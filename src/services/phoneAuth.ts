@@ -1,5 +1,6 @@
-import { UserWalletProfile, db, signUpWithPhone, signInWithPhone, logoutUser } from './firebase';
-import { backendApi, mapBackendMeToProfile } from './backendApi';
+import { UserWalletProfile, db, getOrCreateUserProfile, signUpWithPhone, signInWithPhone, logoutUser } from './firebase';
+import { ApiClientError, backendApi, mapBackendMeToProfile } from './backendApi';
+import type { User as FirebaseUser } from 'firebase/auth';
 import { doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
 import { recordAccountRegistrationOnDevice } from './deviceSecurity';
 
@@ -11,7 +12,7 @@ export interface AppUser {
   email: string | null;
   phoneNumber: string | null;
   photoURL: string | null;
-  provider: 'google' | 'phone';
+  provider: 'google' | 'facebook' | 'phone' | 'email';
   /** Server-verified PostgreSQL role returned by /api/me. */
   isAdmin?: boolean;
   status?: 'active' | 'suspended' | 'banned';
@@ -226,118 +227,165 @@ export function saveStoredPhoneAccounts(accounts: Record<string, StoredPhoneAcco
   }
 }
 
-// Register a new mobile number account
-// Starts with ৳ 100 welcome bonus balance!
-// Supports referral code: referrer gets ৳ 50 bonus commission!
-async function getServerPhoneAccount(phone: string): Promise<{ user: AppUser; profile: UserWalletProfile }> {
+async function getServerEmailAccount(fallbackName?: string): Promise<{ user: AppUser; profile: UserWalletProfile }> {
   const me = await backendApi.getMe();
   const firebaseUser = (await import('./firebase')).auth.currentUser;
   const profile = mapBackendMeToProfile(me, firebaseUser);
+  const isFacebookProvider = firebaseUser?.providerData?.some((p) => p.providerId === 'facebook.com') ?? false;
+  const isGoogleProvider = firebaseUser?.providerData?.some((p) => p.providerId === 'google.com') ?? false;
   const user: AppUser = {
     uid: me.user.uid,
     userCode: me.user.userCode,
     referralCode: me.user.referralCode,
-    displayName: me.user.displayName || `User ${phone}`,
-    email: me.user.email,
-    phoneNumber: me.user.phoneNumber || phone,
+    displayName: me.user.displayName || fallbackName || firebaseUser?.displayName || 'Player',
+    email: me.user.email || firebaseUser?.email || null,
+    phoneNumber: me.user.phoneNumber || null,
     photoURL: firebaseUser?.photoURL || null,
-    provider: 'phone',
+    provider: isFacebookProvider ? 'facebook' : isGoogleProvider ? 'google' : 'email',
     isAdmin: me.user.isAdmin === true,
     status: me.user.status as AppUser['status'],
   };
   return { user, profile };
 }
 
-// New accounts use real email/password identities; phone is stored as a required profile field.
-export async function registerPhoneAccount(
+export async function buildFirestoreFallbackSession(
+  firebaseUser: FirebaseUser,
+  phoneHint?: string,
+  referralCodeInput?: string
+): Promise<{ user: AppUser; profile: UserWalletProfile }> {
+  const profile = await getOrCreateUserProfile(
+    firebaseUser,
+    0,
+    phoneHint || undefined,
+    firebaseUser.displayName || undefined,
+    referralCodeInput
+  );
+  const isPhoneAlias = /^user_01[0-9]{9}@phone\.aviator\.bd$/i.test(firebaseUser.email || '');
+  const isFacebookProvider = firebaseUser.providerData?.some((p) => p.providerId === 'facebook.com') ?? false;
+  const isGoogleProvider = firebaseUser.providerData?.some((p) => p.providerId === 'google.com') ?? false;
+  const user: AppUser = {
+    uid: firebaseUser.uid,
+    userCode: profile.userCode,
+    referralCode: profile.referralCode || profile.userCode,
+    displayName: profile.displayName || firebaseUser.displayName || 'Player',
+    email: firebaseUser.email,
+    phoneNumber: profile.phoneNumber || firebaseUser.phoneNumber || phoneHint || null,
+    photoURL: firebaseUser.photoURL,
+    provider: isPhoneAlias ? 'phone' : isFacebookProvider ? 'facebook' : isGoogleProvider ? 'google' : 'email',
+    // Never elevate admin role client-side when backend is unreachable.
+    isAdmin: false,
+    status: profile.status || 'active',
+  };
+  return { user, profile };
+}
+
+// Sign up directly with Gmail/Email and Password (no mobile number required)
+export async function registerEmailAccount(
   email: string,
-  rawPhone: string,
   pass: string,
   fullName?: string,
-  _referralCodeInput?: string
-): Promise<{ success: boolean; error?: string }> {
-  const { cleanPhone } = normalizePhoneNumber(rawPhone);
-  if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };
-  if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return { success: false, error: 'সঠিক ইমেইল ঠিকানা দিন।' };
-  if (!pass || pass.length < 6) return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
+  referralCodeInput?: string
+): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    return { success: false, error: 'সঠিক জিমেইল ঠিকানা দিন।' };
+  }
+  if (!pass || pass.length < 6) {
+    return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
+  }
 
   try {
-    const { createEmailPasswordAccount } = await import('./firebase');
-    await createEmailPasswordAccount(email, pass, fullName);
-    await backendApi.sendEmailOtp(email.trim().toLowerCase());
-    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
-    return { success: true };
+    const { signUpWithEmail } = await import('./firebase');
+    const firebaseUser = await signUpWithEmail(normalizedEmail, pass, fullName);
+
+    try {
+      const profilePatch: { displayName?: string; referralCode?: string } = {
+        ...(fullName?.trim() ? { displayName: fullName.trim() } : {}),
+        ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
+      };
+      if (Object.keys(profilePatch).length > 0) {
+        await backendApi.updateProfile(profilePatch);
+      }
+      const account = await getServerEmailAccount(fullName);
+      try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+      return { success: true, ...account };
+    } catch (backendErr) {
+      if (backendErr instanceof ApiClientError && backendErr.code === 'NETWORK_ERROR') {
+        const fallbackAccount = await buildFirestoreFallbackSession(firebaseUser, undefined, referralCodeInput);
+        try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+        return { success: true, ...fallbackAccount };
+      }
+      throw backendErr;
+    }
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
-    if (code === 'auth/email-already-in-use') return { success: false, error: 'এই ইমেইল দিয়ে অ্যাকাউন্ট আগে থেকেই আছে। লগইন করুন।' };
-    if (code === 'auth/weak-password') return { success: false, error: 'পাসওয়ার্ড আরও শক্তিশালী করুন।' };
+    if (code === 'auth/email-already-in-use') {
+      return { success: false, error: 'এই জিমেইল দিয়ে অ্যাকাউন্ট আগে থেকেই আছে। লগইন করুন।' };
+    }
+    if (code === 'auth/weak-password') {
+      return { success: false, error: 'পাসওয়ার্ড আরও শক্তিশালী করুন (কমপক্ষে ৬ অক্ষর)।' };
+    }
+    if (code === 'auth/invalid-email') {
+      return { success: false, error: 'সঠিক জিমেইল ঠিকানা দিন।' };
+    }
+    if (code === 'auth/operation-not-allowed') {
+      return { success: false, error: 'Firebase Console-এ Email/Password Sign-in সক্রিয় নেই। অনুগ্রহ করে অ্যাডমিনকে জানান।' };
+    }
     return { success: false, error: err instanceof Error ? err.message : 'অ্যাকাউন্ট তৈরি করা যায়নি।' };
   }
 }
 
-export async function loginPhoneAccount(
+// Login directly with Gmail/Email and Password (no mobile number required)
+export async function loginEmailAccount(
   email: string,
-  rawPhone: string,
   pass: string,
   referralCodeInput?: string
-): Promise<{ success: boolean; requiresVerification?: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
-  const identifier = email.trim();
-  const { cleanPhone } = normalizePhoneNumber(identifier);
-  const isPhoneLogin = /^01[0-9]{9}$/.test(cleanPhone);
-  if (!isPhoneLogin && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
-    return { success: false, error: 'সঠিক ইমেইল অথবা ১১ ডিজিটের মোবাইল নম্বর দিন।' };
+): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    return { success: false, error: 'সঠিক জিমেইল ঠিকানা দিন।' };
   }
-  if (isPhoneLogin) {
+  if (!pass || pass.length < 6) {
+    return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
+  }
+
+  try {
+    const { signInWithEmail } = await import('./firebase');
+    const firebaseUser = await signInWithEmail(normalizedEmail, pass);
+
     try {
-      const { customToken } = await backendApi.phoneLogin(cleanPhone, pass);
-      const { signInWithPhoneCustomToken } = await import('./firebase');
-      await signInWithPhoneCustomToken(customToken);
-      const account = await getServerPhoneAccount(cleanPhone);
+      if (referralCodeInput?.trim()) {
+        await backendApi.updateProfile({ referralCode: referralCodeInput.trim() }).catch(() => {});
+      }
+      const account = await getServerEmailAccount();
       try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
       return { success: true, ...account };
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।' };
-    }
-  }
-  try {
-    const { signInWithVerifiedEmail, migrateLegacyPhoneAccountToEmail } = await import('./firebase');
-    let firebaseUser;
-    try {
-      firebaseUser = await signInWithVerifiedEmail(email, pass);
-    } catch (emailLoginError) {
-      const code = (emailLoginError as { code?: string })?.code || '';
-      if (!['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(code)) throw emailLoginError;
-      try {
-        await migrateLegacyPhoneAccountToEmail(cleanPhone, pass, email);
-        await backendApi.sendEmailOtp(email.trim().toLowerCase());
-        return { success: false, requiresVerification: true, error: 'পুরোনো অ্যাকাউন্টটি একইভাবে সংরক্ষণ করে ইমেইল যুক্ত করা হয়েছে। ইমেইলে পাঠানো OTP দিয়ে ভেরিফাই করুন।' };
-      } catch (migrationError) {
-        const migrationCode = (migrationError as { code?: string })?.code || '';
-        if (migrationCode === 'auth/email-already-in-use') return { success: false, error: 'এই ইমেইলটি অন্য Firebase অ্যাকাউন্টে যুক্ত আছে। পুরোনো ওয়ালেট নিরাপদে যুক্ত করতে সহায়তা প্রয়োজন; নতুন অ্যাকাউন্ট খুলবেন না।' };
-        if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(migrationCode)) return { success: false, error: 'পুরোনো মোবাইল অ্যাকাউন্টের পাসওয়ার্ড সঠিক নয়।' };
-        throw migrationError;
+    } catch (backendErr) {
+      if (backendErr instanceof ApiClientError && backendErr.code === 'NETWORK_ERROR') {
+        const fallbackAccount = await buildFirestoreFallbackSession(firebaseUser, undefined, referralCodeInput);
+        try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+        return { success: true, ...fallbackAccount };
       }
+      throw backendErr;
     }
-    const existingProfile = await backendApi.getMe().catch((err) => {
-      if ((err as { code?: string }).code === 'NOT_FOUND' || (err as { code?: string }).code === 'USER_NOT_FOUND') return null;
-      throw err;
-    });
-    const existingPhone = existingProfile?.user.phoneNumber?.replace(/\D/g, '') || '';
-    const suppliedPhone = normalizePhoneNumber(rawPhone).cleanPhone;
-    const phoneToSave = /^01[0-9]{9}$/.test(suppliedPhone) ? suppliedPhone : cleanPhone;
-    await backendApi.updateProfile({
-      ...(!existingPhone && /^01[0-9]{9}$/.test(phoneToSave) ? { phoneNumber: phoneToSave } : {}),
-      ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
-    });
-    const account = await getServerPhoneAccount(phoneToSave);
-    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
-    return { success: true, ...account };
   } catch (err) {
     const code = (err as { code?: string })?.code || '';
-    if (err instanceof Error && err.message === 'EMAIL_NOT_VERIFIED') {
-      return { success: false, error: 'আপনার ইমেইল এখনো ভেরিফাই হয়নি। ইমেইলে পাঠানো ৬ সংখ্যার OTP দিয়ে ভেরিফাই করুন।' };
+    if (
+      code === 'auth/invalid-credential' ||
+      code === 'auth/wrong-password' ||
+      code === 'auth/user-not-found'
+    ) {
+      return { success: false, error: 'জিমেইল অথবা পাসওয়ার্ড সঠিক নয়।' };
     }
-    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') return { success: false, error: 'ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।' };
+    if (code === 'auth/invalid-email') {
+      return { success: false, error: 'সঠিক জিমেইল ঠিকানা দিন।' };
+    }
+    if (code === 'auth/too-many-requests') {
+      return { success: false, error: 'অনেকবার ভুল চেষ্টা করা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।' };
+    }
+    if (code === 'auth/operation-not-allowed') {
+      return { success: false, error: 'Firebase Console-এ Email/Password Sign-in সক্রিয় নেই। অনুগ্রহ করে অ্যাডমিনকে জানান।' };
+    }
     return { success: false, error: err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।' };
   }
 }

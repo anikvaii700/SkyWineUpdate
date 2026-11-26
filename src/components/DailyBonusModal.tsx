@@ -26,7 +26,7 @@ import {
 } from '../services/bonusService';
 import { AppUser, ReferralRecord } from '../services/phoneAuth';
 import { auth } from '../services/firebase';
-import { backendApi } from '../services/backendApi';
+import { ApiClientError, backendApi } from '../services/backendApi';
 import { UserWalletProfile } from '../services/firebase';
 import { buildReferralLink, listenToUserReferrals } from '../services/referralService';
 
@@ -98,6 +98,8 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
       return;
     }
 
+    let unsubFallback: (() => void) | null = null;
+
     if (auth.currentUser) {
       backendApi.getMyReferrals()
         .then((result) => {
@@ -119,12 +121,20 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
           setReferrals(records);
         })
         .catch((err) => {
-          if (!cancelled) {
-            console.warn('Server referral summary could not be loaded:', err);
-            setReferrals([]);
+          if (cancelled) return;
+          if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+            unsubFallback = listenToUserReferrals(userRefCode, currentUser.uid, (records) => {
+              if (!cancelled) setReferrals(records);
+            });
+            return;
           }
+          console.warn('Server referral summary could not be loaded:', err);
+          setReferrals([]);
         });
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+        if (unsubFallback) unsubFallback();
+      };
     }
 
     const unsub = listenToUserReferrals(userRefCode, currentUser.uid, (records) => {

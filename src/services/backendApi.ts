@@ -39,6 +39,43 @@ function resolveApiUrl(path: string): string {
   return API_BASE_URL ? `${API_BASE_URL}${normalizedPath}` : normalizedPath;
 }
 
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      const contentType = response.headers.get('content-type') || '';
+      const isHtml = contentType.includes('text/html');
+      if (isHtml && attempt === 0) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+      if (isHtml) {
+        throw new ApiClientError(
+          response.status || 503,
+          'NETWORK_ERROR',
+          'সার্ভারের সাথে সংযোগ স্থাপন করা যায়নি। পেজটি রিলোড করে আবার চেষ্টা করুন।',
+          `Unexpected HTML response (${response.status})`
+        );
+      }
+      return response;
+    } catch (err) {
+      if (err instanceof ApiClientError) throw err;
+      lastError = err;
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+    }
+  }
+  throw new ApiClientError(
+    0,
+    'NETWORK_ERROR',
+    'সার্ভারের সাথে সংযোগ স্থাপন করা যায়নি। পেজটি রিলোড করে আবার চেষ্টা করুন।',
+    lastError instanceof Error ? lastError.message : undefined
+  );
+}
+
 async function apiRequest<T>(
   path: string,
   options: {
@@ -48,11 +85,12 @@ async function apiRequest<T>(
   } = {}
 ): Promise<T> {
   const headers = await getAuthHeaders(options.requireAuth ?? true);
-  const response = await fetch(resolveApiUrl(path), {
+  const response = await fetchWithRetry(resolveApiUrl(path), {
     method: options.method ?? 'GET',
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     cache: 'no-store',
+    credentials: API_BASE_URL ? 'omit' : 'same-origin',
   });
 
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;

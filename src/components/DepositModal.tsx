@@ -23,7 +23,7 @@ import { soundManager } from '../services/audio';
 import { Language, translations } from '../utils/i18n';
 import { AppUser, getActivePhoneSession, getStoredPhoneAccounts } from '../services/phoneAuth';
 import { UserWalletProfile, auth } from '../services/firebase';
-import { backendApi } from '../services/backendApi';
+import { ApiClientError, backendApi } from '../services/backendApi';
 import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../services/userManagement';
 import {
   SystemPaymentSettings,
@@ -34,6 +34,9 @@ import {
   submitManualDepositRequest,
   getStoredWithdrawalRequests,
   submitManualWithdrawalRequest,
+  syncPaymentSettingsFromFirestore,
+  syncDepositRequestsFromFirestore,
+  syncWithdrawalRequestsFromFirestore,
 } from '../services/manualPayment';
 import { getStoredAppControls } from '../services/appControlService';
 
@@ -105,6 +108,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
   const t = translations[lang];
 
+  const isSyncingFirestoreRef = React.useRef<boolean>(false);
+
   const loadData = async () => {
     const firebaseUser = auth.currentUser;
     setServerMode(Boolean(firebaseUser));
@@ -143,9 +148,50 @@ export const DepositModal: React.FC<DepositModalProps> = ({
         })));
         return;
       } catch (err) {
-        console.error('Could not load wallet from backend:', err);
-        setSubmissionError('সার্ভার থেকে ওয়ালেট ডাটা পাওয়া যায়নি। আবার চেষ্টা করুন।');
-        return;
+        if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+          isSyncingFirestoreRef.current = true;
+          try {
+            const [syncedSettings, syncedDeposits, syncedWithdrawals] = await Promise.all([
+              syncPaymentSettingsFromFirestore().catch(() => getStoredPaymentSettings()),
+              syncDepositRequestsFromFirestore().catch(() => getStoredDepositRequests()),
+              syncWithdrawalRequestsFromFirestore().catch(() => getStoredWithdrawalRequests()),
+            ]);
+            setPaymentSettings(syncedSettings);
+            const lockedBonus = calculateTotalLockedBonuses({
+              initialBonus: userProfile?.initialBonus,
+              referralBonusEarned: userProfile?.referralBonusEarned,
+              inviteBonusBalance: userProfile?.inviteBonusBalance,
+              firstDepositBonusEarned: userProfile?.firstDepositBonusEarned,
+              rewardBonusEarned: userProfile?.rewardBonusEarned,
+              lockedPrincipal: userProfile?.lockedPrincipal,
+            });
+            const hasDep = Boolean(userProfile?.hasDeposited || (userProfile?.totalDeposited && userProfile.totalDeposited > 0));
+            setServerWallet({
+              balance: currentBalance,
+              inviteBonusLocked: lockedBonus,
+              withdrawableBalance: calculateWithdrawableBalance(currentBalance, lockedBonus, hasDep, userProfile?.totalDeposited),
+              totalDeposited: Number(userProfile?.totalDeposited || 0),
+            });
+            const uid = currentUser?.uid || firebaseUser.uid;
+            const phone = currentUser?.phoneNumber || userPhone;
+            setUserRequests(syncedDeposits.filter((r) =>
+              Boolean((uid && r.userId === uid) || (phone && (r.senderNumber === phone || r.userIdentifier.includes(phone))))
+            ));
+            setUserWithdrawals(syncedWithdrawals.filter((r) =>
+              Boolean((uid && r.userId === uid) || (phone && (r.personalNumber === phone || r.userIdentifier.includes(phone))))
+            ));
+          } finally {
+            isSyncingFirestoreRef.current = false;
+          }
+          return;
+        }
+        if (err instanceof ApiClientError && err.code === 'NOT_SIGNED_IN') {
+          setServerMode(false);
+        } else {
+          console.error('Could not load wallet from backend:', err);
+          setSubmissionError('সার্ভার থেকে ওয়ালেট ডাটা পাওয়া যায়নি। আবার চেষ্টা করুন।');
+          return;
+        }
       }
     }
 
@@ -187,9 +233,20 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   }, [isOpen, currentUser, userPhone]);
 
   useEffect(() => {
-    const handleSettingsUpdated = () => { void loadData(); };
-    const handleRequestsUpdated = () => loadData();
-    const handleWithdrawalsUpdated = () => loadData();
+    if (!isOpen) return;
+
+    const handleSettingsUpdated = () => {
+      if (isSyncingFirestoreRef.current) return;
+      void loadData();
+    };
+    const handleRequestsUpdated = () => {
+      if (isSyncingFirestoreRef.current) return;
+      void loadData();
+    };
+    const handleWithdrawalsUpdated = () => {
+      if (isSyncingFirestoreRef.current) return;
+      void loadData();
+    };
 
     window.addEventListener('payment_settings_updated', handleSettingsUpdated);
     window.addEventListener('deposit_requests_updated', handleRequestsUpdated);
@@ -200,7 +257,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       window.removeEventListener('deposit_requests_updated', handleRequestsUpdated);
       window.removeEventListener('withdrawal_requests_updated', handleWithdrawalsUpdated);
     };
-  }, [currentUser, userPhone]);
+  }, [isOpen, currentUser, userPhone]);
 
   useEffect(() => {
     if (activeTab === 'withdraw') {
@@ -384,6 +441,28 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       soundManager.playWin();
       await loadData();
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        const fbRes = await submitManualDepositRequest({
+          userId: auth.currentUser.uid,
+          userCode: userProfile?.userCode || currentUser.userCode || '',
+          userIdentifier: currentUser.displayName || currentUser.phoneNumber || currentUser.email || auth.currentUser.uid,
+          method: selectedMethod,
+          targetNumber: currentGateway.number,
+          senderNumber: cleanSender,
+          trxId: cleanTrx,
+          amount: depositAmount,
+        });
+        if (fbRes.success && fbRes.request) {
+          setSubmissionSuccess(fbRes.request);
+          setTrxId('');
+          soundManager.playWin();
+          await loadData();
+          return;
+        }
+        setSubmissionError(fbRes.error || 'ডিপোজিট রিকোয়েস্ট পাঠানো যায়নি।');
+        soundManager.playCrash();
+        return;
+      }
       const code = (err as { code?: string }).code || '';
       const messages: Record<string, string> = {
         DUPLICATE_TRX_ID: 'এই TrxID আগে জমা দেওয়া হয়েছে।',
@@ -455,6 +534,25 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       soundManager.playWin();
       await loadData();
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        const fbRes = await submitManualWithdrawalRequest({
+          userId: auth.currentUser.uid,
+          userCode: userProfile?.userCode || currentUser.userCode || '',
+          userIdentifier: currentUser.displayName || currentUser.phoneNumber || currentUser.email || auth.currentUser.uid,
+          method: selectedWithdrawMethod,
+          personalNumber: cleanPhone,
+          amount: withdrawAmount,
+        });
+        if (fbRes.success && fbRes.request) {
+          setWithdrawSuccess(fbRes.request);
+          soundManager.playWin();
+          await loadData();
+          return;
+        }
+        setWithdrawError(fbRes.error || 'উত্তোলন রিকোয়েস্ট পাঠানো যায়নি।');
+        soundManager.playCrash();
+        return;
+      }
       const code = (err as { code?: string }).code || '';
       const messages: Record<string, string> = {
         INSUFFICIENT_BALANCE: 'আপনার উত্তোলনযোগ্য ব্যালেন্স যথেষ্ট নয়।',

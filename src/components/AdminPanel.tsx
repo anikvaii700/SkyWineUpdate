@@ -69,7 +69,7 @@ import {
   listenToWithdrawalRequests,
 } from '../services/manualPayment';
 import { soundManager } from '../services/audio';
-import { backendApi } from '../services/backendApi';
+import { ApiClientError, backendApi } from '../services/backendApi';
 import {
   BroadcastNotification,
   getStoredBroadcastNotifications,
@@ -92,7 +92,7 @@ import {
 import { getAllAccountsWithStats, calculateWithdrawableBalance, syncUsersFromFirestore } from '../services/userManagement';
 import { StoredPhoneAccount, ReferralRecord, getStoredPhoneAccounts } from '../services/phoneAuth';
 import { setAdminVisible, getRegisteredAdminPhone, saveRegisteredAdminPhone } from '../services/adminAuth';
-import { db } from '../services/firebase';
+import { db, auth } from '../services/firebase';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 
 type AdminTabType =
@@ -319,8 +319,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     () => localStorage.getItem('aviator_marquee_text') || '🎉 স্বাগতম অ্যাভিয়েটর অফিসিয়াল মোবাইল গেমে! ৳ ৫০০ ডিপোজিট করলেই পাচ্ছেন আকর্ষণীয় বোনাস! বিকাশ, নগদ ও রকেটে ১-৩ মিনিটে দ্রুত পেমেন্ট সম্পন্ন হয়। উপভোগ করুন সেরা ক্র্যাশ গেম ও সেরা জয়! 🚀'
   );
 
+  const isSyncingFirestoreRef = React.useRef<boolean>(false);
+
+  const loadFirestoreAdminData = async () => {
+    isSyncingFirestoreRef.current = true;
+    try {
+      const [deposits, wdList, syncedSettings, syncedUsers] = await Promise.all([
+        syncDepositRequestsFromFirestore().catch(() => getStoredDepositRequests()),
+        syncWithdrawalRequestsFromFirestore().catch(() => getStoredWithdrawalRequests()),
+        syncPaymentSettingsFromFirestore().catch(() => getStoredPaymentSettings()),
+        syncUsersFromFirestore().catch(() => getAllAccountsWithStats()),
+      ]);
+      setRequests(deposits);
+      setWithdrawals(wdList);
+      setAccountsWithStats(syncedUsers);
+      setLocalAccounts(
+        syncedUsers
+          .filter((u) => Boolean(u.phoneNumber))
+          .map((u) => ({ uid: u.uid, phone: u.phoneNumber, name: u.displayName, balance: u.balance }))
+      );
+      setSettings(syncedSettings);
+      if (syncedSettings.marqueeNotice) setMarqueeNotice(syncedSettings.marqueeNotice);
+    } finally {
+      isSyncingFirestoreRef.current = false;
+    }
+  };
+
   // Load and subscribe to requests & settings
   const reloadData = () => {
+    if (!isOpen || !isAuthorized || !auth.currentUser) {
+      return;
+    }
+
     setRequests([]);
     setWithdrawals([]);
     setAccountsWithStats([]);
@@ -351,6 +381,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         if (merged.marqueeNotice) setMarqueeNotice(merged.marqueeNotice);
       }
     }).catch((err) => {
+      if (err instanceof ApiClientError && err.code === 'NOT_SIGNED_IN') {
+        return;
+      }
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        void loadFirestoreAdminData();
+        return;
+      }
       console.error('Admin API load failed:', err);
       showAdminToast('সার্ভার ডাটা লোড হয়নি', 'পেজ রিফ্রেশ করে আবার চেষ্টা করুন।', 'error');
     });
@@ -360,38 +397,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
-      reloadData();
-      // Realtime listener for broadcast notifications
-      const unsubBroadcast = listenToBroadcastNotifications((list) => {
-        setBroadcastList(list);
-      });
+    if (!isOpen || !isAuthorized) return;
 
+    reloadData();
+    // Realtime listener for broadcast notifications
+    const unsubBroadcast = listenToBroadcastNotifications((list) => {
+      setBroadcastList(list);
+    });
 
-      // Realtime listener for App Controls (Game Control, Limits, Maintenance, Bonuses)
-      const unsubControls = subscribeToAppControls((cfg) => {
-        setAppControls(cfg);
-      });
+    // Realtime listener for App Controls (Game Control, Limits, Maintenance, Bonuses)
+    const unsubControls = subscribeToAppControls((cfg) => {
+      setAppControls(cfg);
+    });
 
-      // Realtime listener for all referral records
-      const unsubReferrals = listenToAllReferralsForAdmin((refs) => {
-        setAllReferrals(refs);
-      });
+    // Realtime listener for all referral records
+    const unsubReferrals = listenToAllReferralsForAdmin((refs) => {
+      setAllReferrals(refs);
+    });
 
-      return () => {
-        unsubBroadcast();
-        unsubControls();
-        unsubReferrals();
-      };
-    }
-  }, [isOpen]);
+    return () => {
+      unsubBroadcast();
+      unsubControls();
+      unsubReferrals();
+    };
+  }, [isOpen, isAuthorized]);
 
   useEffect(() => {
-    const handleRequestsUpdated = () => reloadData();
-    const handleWithdrawalsUpdated = () => reloadData();
-    const handleSettingsUpdated = () => reloadData();
-    const handleAccountsUpdated = () => reloadData();
+    if (!isOpen || !isAuthorized) return;
+
+    const handleRequestsUpdated = () => {
+      if (isSyncingFirestoreRef.current || !auth.currentUser) return;
+      reloadData();
+    };
+    const handleWithdrawalsUpdated = () => {
+      if (isSyncingFirestoreRef.current || !auth.currentUser) return;
+      reloadData();
+    };
+    const handleSettingsUpdated = () => {
+      if (isSyncingFirestoreRef.current || !auth.currentUser) return;
+      reloadData();
+    };
+    const handleAccountsUpdated = () => {
+      if (isSyncingFirestoreRef.current || !auth.currentUser) return;
+      reloadData();
+    };
     const handleBalanceCredited = () => {
+      if (isSyncingFirestoreRef.current || !auth.currentUser) return;
       reloadData();
       if (onBalanceAdjusted) onBalanceAdjusted();
     };
@@ -409,7 +460,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       window.removeEventListener('accounts_updated', handleAccountsUpdated);
       window.removeEventListener('balance_credited', handleBalanceCredited);
     };
-  }, [onBalanceAdjusted]);
+  }, [isOpen, isAuthorized, onBalanceAdjusted]);
 
   if (!isOpen || !isAuthorized) return null;
 
@@ -539,7 +590,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
   };
 
-  // Save payment details and limits only through authenticated PostgreSQL admin API.
+  // Save payment details and limits via backend API, falling back to Firestore if API unreachable.
   const handleSaveSettings = async () => {
     setIsSavingSettings(true);
     setSaveSuccessMsg('');
@@ -547,13 +598,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       await backendApi.admin.updatePaymentSettings(buildBackendPaymentPayload(settings));
       saveActivePlayersSettings(activePlayersSettings);
       localStorage.setItem('aviator_marquee_text', marqueeNotice);
-      window.dispatchEvent(new Event('marquee_text_updated'));
-      window.dispatchEvent(new Event('payment_settings_updated'));
+      isSyncingFirestoreRef.current = true;
+      try {
+        window.dispatchEvent(new Event('marquee_text_updated'));
+        window.dispatchEvent(new Event('payment_settings_updated'));
+      } finally {
+        isSyncingFirestoreRef.current = false;
+      }
       setSaveSuccessMsg('পেমেন্ট সেটিংস সার্ভারে সংরক্ষিত হয়েছে!');
       showAdminToast('সেটিংস সংরক্ষণ সফল', 'পেমেন্ট নম্বর ও সীমা সার্ভারে আপডেট হয়েছে।', 'success');
       reloadData();
       setTimeout(() => setSaveSuccessMsg(''), 5000);
     } catch (e) {
+      if (e instanceof ApiClientError && e.code === 'NETWORK_ERROR') {
+        isSyncingFirestoreRef.current = true;
+        try {
+          await savePaymentSettings({ ...settings, marqueeNotice });
+          saveActivePlayersSettings(activePlayersSettings);
+          localStorage.setItem('aviator_marquee_text', marqueeNotice);
+          window.dispatchEvent(new Event('marquee_text_updated'));
+          window.dispatchEvent(new Event('payment_settings_updated'));
+        } finally {
+          isSyncingFirestoreRef.current = false;
+        }
+        setSaveSuccessMsg('পেমেন্ট সেটিংস ক্লাউডে সংরক্ষিত হয়েছে!');
+        showAdminToast('সেটিংস সংরক্ষণ সফল', 'পেমেন্ট নম্বর ও সীমা ক্লাউডে আপডেট হয়েছে।', 'success');
+        setTimeout(() => setSaveSuccessMsg(''), 5000);
+        return;
+      }
       console.error(e);
       showAdminToast('সংরক্ষণ ব্যর্থ হয়েছে', 'সার্ভার সংযোগ ও Admin অনুমতি পরীক্ষা করুন।', 'error');
     } finally {
@@ -586,7 +658,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const clean = Math.max(0, Math.min(200, Math.round(percent)));
     const nextSettings = { ...settings, firstDepositBonusPercent: clean };
     setSettings(nextSettings);
-    await backendApi.admin.updatePaymentSettings(buildBackendPaymentPayload(nextSettings));
+    try {
+      await backendApi.admin.updatePaymentSettings(buildBackendPaymentPayload(nextSettings));
+    } catch (e) {
+      if (e instanceof ApiClientError && e.code === 'NETWORK_ERROR') {
+        await savePaymentSettings(nextSettings);
+      } else {
+        throw e;
+      }
+    }
     showAdminToast(
       `প্রথম ডিপোজিট বোনাস ${clean}% সেট হয়েছে!`,
       'নতুন প্রথম ডিপোজিট বোনাস হার ক্লাউডে আপডেট হয়েছে।',
@@ -594,7 +674,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   };
 
-  // Approve/reject requests using the PostgreSQL ledger and server RBAC.
+  // Approve/reject requests using the PostgreSQL ledger and server RBAC, or Firestore fallback on NETWORK_ERROR.
   const handleApprove = async (req: ManualDepositRequest) => {
     soundManager.playClick();
     try {
@@ -609,6 +689,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         'success'
       );
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        const fbRes = await approveManualDepositRequest(req.id, 'Approved via Admin Panel');
+        if (fbRes.success) {
+          await loadFirestoreAdminData();
+          if (onBalanceAdjusted) onBalanceAdjusted();
+          showAdminToast(
+            'ডিপোজিট সফলভাবে অনুমোদিত!',
+            `গ্রাহক ${req.userIdentifier}-এর ওয়ালেটে ৳${Number(fbRes.totalCredited || req.amount).toLocaleString()} যোগ হয়েছে।`,
+            'success'
+          );
+          return;
+        }
+        showAdminToast('অনুমোদনে সমস্যা হয়েছে', fbRes.error || 'অনুমোদন ব্যর্থ হয়েছে', 'error');
+        return;
+      }
       showAdminToast('অনুমোদনে সমস্যা হয়েছে', err instanceof Error ? err.message : 'অনুমোদন ব্যর্থ হয়েছে', 'error');
     }
   };
@@ -622,6 +717,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       reloadData();
       showAdminToast('ডিপোজিট রিকোয়েস্ট বাতিল করা হয়েছে', 'সার্ভারে বাতিলের তথ্য সংরক্ষিত হয়েছে।', 'error');
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        const fbRes = await rejectManualDepositRequest(rejectingRequestId, rejectReason);
+        setRejectingRequestId(null);
+        await loadFirestoreAdminData();
+        if (fbRes.success) {
+          showAdminToast('ডিপোজিট রিকোয়েস্ট বাতিল করা হয়েছে', 'ক্লাউডে বাতিলের তথ্য সংরক্ষিত হয়েছে।', 'error');
+          return;
+        }
+      }
       showAdminToast('বাতিল করতে সমস্যা হয়েছে', err instanceof Error ? err.message : 'বাতিল ব্যর্থ হয়েছে', 'error');
     }
   };
@@ -677,7 +781,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Refresh wallet/admin data from PostgreSQL.
+  // Refresh wallet/admin data from PostgreSQL (or Firestore fallback).
   const handleRefresh = async () => {
     setIsRefreshing(true);
     soundManager.playClick();
@@ -691,6 +795,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       reloadData();
       showAdminToast('সার্ভার ডাটা রিফ্রেশ সম্পন্ন!', 'সর্বশেষ ওয়ালেট, রিকোয়েস্ট ও সেটিংস লোড হয়েছে।', 'info');
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        await loadFirestoreAdminData();
+        showAdminToast('ডাটা রিফ্রেশ সম্পন্ন!', 'ক্লাউড ওয়ালেট, রিকোয়েস্ট ও সেটিংস লোড হয়েছে।', 'info');
+        return;
+      }
       showAdminToast('রিফ্রেশ ব্যর্থ', err instanceof Error ? err.message : 'সার্ভার ডাটা পাওয়া যায়নি।', 'error');
     } finally {
       setIsRefreshing(false);
@@ -727,6 +836,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         'success'
       );
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        const fbRes = await completeManualWithdrawalRequest(req.id, note || 'টাকা সফলভাবে পাঠানো হয়েছে');
+        if (fbRes.success) {
+          setCompletingWithdrawal(null);
+          await loadFirestoreAdminData();
+          showAdminToast(
+            'উত্তোলন সফলভাবে সম্পন্ন!',
+            `নম্বর ${req.personalNumber}-এ ৳${req.amount.toLocaleString()} পাঠানো নিশ্চিত করা হয়েছে।`,
+            'success'
+          );
+          return;
+        }
+      }
       showAdminToast('উত্তোলন সম্পন্ন করতে সমস্যা হয়েছে', err instanceof Error ? err.message : 'ব্যর্থ হয়েছে', 'error');
     }
   };
@@ -743,6 +865,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (onBalanceAdjusted) onBalanceAdjusted();
       showAdminToast('উত্তোলন রিকোয়েস্ট বাতিল হয়েছে', 'টাকা সার্ভারের ওয়ালেটে ফেরত যোগ হয়েছে।', 'error');
     } catch (err) {
+      if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+        const fbRes = await rejectManualWithdrawalRequest(rejectingWithdrawalId, rejectWithdrawalReason);
+        if (fbRes.success) {
+          soundManager.playCrash();
+          setRejectingWithdrawalId(null);
+          setRejectWithdrawalReason('ভুল বা অসত্য পার্সোনাল নম্বর');
+          await loadFirestoreAdminData();
+          if (onBalanceAdjusted) onBalanceAdjusted();
+          showAdminToast('উত্তোলন রিকোয়েস্ট বাতিল হয়েছে', 'টাকা ওয়ালেটে ফেরত যোগ হয়েছে।', 'error');
+          return;
+        }
+      }
       showAdminToast('বাতিল করতে সমস্যা হয়েছে', err instanceof Error ? err.message : 'ব্যর্থ হয়েছে', 'error');
     }
   };

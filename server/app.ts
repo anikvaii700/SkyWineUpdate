@@ -47,8 +47,22 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
       const normalizedOrigin = requestOrigin.replace(/\/+$/, '');
       const hostHeader = req.headers.host;
-      const sameOriginHttp = hostHeader ? `http://${hostHeader}` : '';
-      const sameOriginHttps = hostHeader ? `https://${hostHeader}` : '';
+      const forwardedHostRaw = req.headers['x-forwarded-host'];
+      const forwardedHost = Array.isArray(forwardedHostRaw)
+        ? forwardedHostRaw[0]?.split(',')[0]?.trim()
+        : forwardedHostRaw?.split(',')[0]?.trim();
+      const ngAllowedHosts = (process.env.NG_ALLOWED_HOSTS || '')
+        .split(',')
+        .map((h) => h.trim())
+        .filter(Boolean);
+
+      const allowedSameOriginHosts = new Set<string>(
+        [hostHeader, forwardedHost, ...ngAllowedHosts].filter((h): h is string => Boolean(h))
+      );
+
+      const isSameOrigin = Array.from(allowedSameOriginHosts).some(
+        (h) => normalizedOrigin === `https://${h}` || normalizedOrigin === `http://${h}`
+      );
 
       const isLocalDevOrigin =
         !env.isProduction &&
@@ -57,8 +71,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
       const isAllowed =
         configuredOrigins.has(normalizedOrigin) ||
-        normalizedOrigin === sameOriginHttps ||
-        normalizedOrigin === sameOriginHttp ||
+        isSameOrigin ||
         isLocalDevOrigin;
 
       if (!isAllowed) {

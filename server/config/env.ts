@@ -41,6 +41,9 @@ export const env = {
   databaseUrl: (process.env.DATABASE_URL || '').trim(),
   firebaseProjectId: (process.env.FIREBASE_PROJECT_ID || readFallbackFirebaseProjectId()).trim(),
   allowedOrigins: parseList(process.env.ALLOWED_ORIGINS),
+  resendApiKey: (process.env.RESEND_API_KEY || '').trim(),
+  resendFromEmail: (process.env.RESEND_FROM_EMAIL || 'SkyWinBD <no-reply@best-product.top>').trim(),
+  emailOtpPepper: (process.env.EMAIL_OTP_PEPPER || '').trim(),
   adminEmails: parseList(process.env.ADMIN_EMAILS).map((email) => email.toLowerCase()),
   adminPhones: parseList(process.env.ADMIN_PHONES).map(normalizeAdminPhone).filter((phone) => /^01[0-9]{9}$/.test(phone)),
 } as const;

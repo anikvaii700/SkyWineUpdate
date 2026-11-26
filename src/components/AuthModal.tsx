@@ -148,9 +148,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         soundManager.playWin();
         onLoginSuccess(appUser, profile);
         setSuccessMsg('Google দিয়ে লগইন সফল হয়েছে! নতুন ওয়ালেট ব্যালেন্স ৳ ০.০০।');
-        setTimeout(() => {
-          onClose();
-        }, 500);
+        onClose();
       }
     } catch (err: unknown) {
       console.warn('Google sign-in attempt:', err);

@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS email_verification_otps (
 
 CREATE INDEX IF NOT EXISTS idx_email_otp_expiry ON email_verification_otps (expires_at);
 
+CREATE TABLE IF NOT EXISTS phone_accounts (
+  phone_number TEXT PRIMARY KEY,
+  user_uid TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS wallets (
   user_id TEXT PRIMARY KEY REFERENCES users(firebase_uid) ON DELETE CASCADE,
   balance NUMERIC(14, 2) NOT NULL DEFAULT 0.00 CHECK (balance >= 0),

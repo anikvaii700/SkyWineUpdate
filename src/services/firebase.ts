@@ -2,7 +2,6 @@ import { initializeApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
-  FacebookAuthProvider,
   signInWithPopup,
   signOut,
   onAuthStateChanged,
@@ -32,8 +31,6 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
-export const facebookProvider = new FacebookAuthProvider();
-facebookProvider.addScope('email');
 
 // Test connection on boot according to skill guideline
 export async function testFirestoreConnection() {
@@ -94,17 +91,6 @@ export async function signInWithGoogle(): Promise<FirebaseUser | null> {
     return result.user;
   } catch (err) {
     console.error('Error signing in with Google:', err);
-    throw err;
-  }
-}
-
-// User sign-in with Facebook popup
-export async function signInWithFacebook(): Promise<FirebaseUser | null> {
-  try {
-    const result = await signInWithPopup(auth, facebookProvider);
-    return result.user;
-  } catch (err) {
-    console.error('Error signing in with Facebook:', err);
     throw err;
   }
 }

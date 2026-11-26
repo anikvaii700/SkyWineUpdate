@@ -277,3 +277,147 @@ describe('SkyWinBD Backend Security, Auth, RBAC & Validation', () => {
     assert.equal(normalizeTrxId('  bkash 9a8b7c  '), 'BKASH9A8B7C');
   });
 });
+
+describe('SkyWinBD Mobile Number & Password Authentication', () => {
+  let server: http.Server;
+  let baseUrl = '';
+
+  before(async () => {
+    const app = createApp({
+      allowedOrigins: ['https://skywineupdate.onrender.com'],
+      disableRateLimit: true,
+    });
+
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (address && typeof address === 'object') {
+          baseUrl = `http://127.0.0.1:${address.port}`;
+        }
+        resolve();
+      });
+    });
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('rejects invalid Bangladeshi phone numbers on signup', async () => {
+    const res = await fetch(`${baseUrl}/api/auth/phone-signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: '01234567890',
+        password: 'password123',
+      }),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { code: string };
+    assert.equal(body.code, 'INVALID_PHONE_NUMBER');
+  });
+
+  it('signs up a mobile number + password, blocks duplicate registration, and authorizes /api/me & login', async () => {
+    const signupRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: '+880 1711-223344',
+        password: 'secretPass99',
+        displayName: 'Rafiq Test',
+      }),
+    });
+    assert.equal(signupRes.status, 201);
+    const signupBody = (await signupRes.json()) as {
+      ok: boolean;
+      token: string;
+      user: { uid: string; phoneNumber: string; displayName: string; role: string };
+      wallet: { balance: number };
+    };
+    assert.equal(signupBody.ok, true);
+    assert.match(signupBody.token, /^skywin_phone_v1\./);
+    assert.equal(signupBody.user.uid, 'phone_01711223344');
+    assert.equal(signupBody.user.phoneNumber, '01711223344');
+    assert.equal(signupBody.user.displayName, 'Rafiq Test');
+    assert.equal(signupBody.user.role, 'user');
+    assert.equal(signupBody.wallet.balance, 0);
+
+    // Duplicate registration returns 409
+    const dupRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: '01711223344',
+        password: 'anotherPassword',
+      }),
+    });
+    assert.equal(dupRes.status, 409);
+    const dupBody = (await dupRes.json()) as { code: string };
+    assert.equal(dupBody.code, 'PHONE_ALREADY_REGISTERED');
+
+    // Wrong password returns 401
+    const badLoginRes = await fetch(`${baseUrl}/api/auth/phone-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: '01711223344',
+        password: 'wrongPassword',
+      }),
+    });
+    assert.equal(badLoginRes.status, 401);
+
+    // Valid login returns fresh signed Bearer token
+    const loginRes = await fetch(`${baseUrl}/api/auth/phone-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: '01711223344',
+        password: 'secretPass99',
+      }),
+    });
+    assert.equal(loginRes.status, 200);
+    const loginBody = (await loginRes.json()) as { ok: boolean; token: string; user: { uid: string } };
+    assert.equal(loginBody.ok, true);
+    assert.equal(loginBody.user.uid, 'phone_01711223344');
+
+    // Authorized /api/me succeeds with issued token
+    const meRes = await fetch(`${baseUrl}/api/me`, {
+      headers: { Authorization: `Bearer ${loginBody.token}` },
+    });
+    assert.equal(meRes.status, 200);
+    const meBody = (await meRes.json()) as { user: { uid: string; phoneNumber: string } };
+    assert.equal(meBody.user.uid, 'phone_01711223344');
+    assert.equal(meBody.user.phoneNumber, '01711223344');
+
+    // Tampered token is rejected with 401
+    const tamperedRes = await fetch(`${baseUrl}/api/me`, {
+      headers: { Authorization: `Bearer ${loginBody.token}tampered` },
+    });
+    assert.equal(tamperedRes.status, 401);
+  });
+
+  it('promotes only the first verified Google user when no explicit admin allowlist is configured', async () => {
+    const { ensureUserAndWallet } = await import('../services/walletLedger.ts');
+
+    const firstGoogle = await ensureUserAndWallet({
+      uid: 'google_first_admin_test',
+      email: 'owner.first@gmail.com',
+      emailVerified: true,
+      name: 'First Owner',
+      picture: null,
+      phoneNumber: null,
+    });
+    assert.equal(firstGoogle.role, 'admin');
+
+    const secondGoogle = await ensureUserAndWallet({
+      uid: 'google_second_player_test',
+      email: 'player.second@gmail.com',
+      emailVerified: true,
+      name: 'Second Player',
+      picture: null,
+      phoneNumber: null,
+    });
+    assert.equal(secondGoogle.role, 'user');
+  });
+});
+

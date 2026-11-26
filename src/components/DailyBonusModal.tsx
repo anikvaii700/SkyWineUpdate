@@ -25,8 +25,7 @@ import {
   BonusState,
 } from '../services/bonusService';
 import { AppUser, ReferralRecord } from '../services/phoneAuth';
-import { auth } from '../services/firebase';
-import { ApiClientError, backendApi } from '../services/backendApi';
+import { ApiClientError, backendApi, hasBackendSession } from '../services/backendApi';
 import { UserWalletProfile } from '../services/firebase';
 import { buildReferralLink, listenToUserReferrals } from '../services/referralService';
 
@@ -100,7 +99,7 @@ export const DailyBonusModal: React.FC<DailyBonusModalProps> = ({
 
     let unsubFallback: (() => void) | null = null;
 
-    if (auth.currentUser) {
+    if (hasBackendSession()) {
       backendApi.getMyReferrals()
         .then((result) => {
           if (cancelled) return;

@@ -23,7 +23,7 @@ import { soundManager } from '../services/audio';
 import { Language, translations } from '../utils/i18n';
 import { AppUser, getActivePhoneSession, getStoredPhoneAccounts } from '../services/phoneAuth';
 import { UserWalletProfile, auth } from '../services/firebase';
-import { ApiClientError, backendApi } from '../services/backendApi';
+import { ApiClientError, backendApi, hasBackendSession } from '../services/backendApi';
 import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../services/userManagement';
 import {
   SystemPaymentSettings,
@@ -87,7 +87,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   // Payment settings (Admin numbers) & Requests
   const [paymentSettings, setPaymentSettings] = useState<SystemPaymentSettings>(getStoredPaymentSettings);
   const [serverWallet, setServerWallet] = useState<{ balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } | null>(null);
-  const [serverMode, setServerMode] = useState<boolean>(Boolean(auth.currentUser));
+  const [serverMode, setServerMode] = useState<boolean>(() => hasBackendSession());
   // One user-facing wallet amount combines the current server wallet and in-session rewards/game balance.
   const displayedBalance = currentBalance;
   const [userRequests, setUserRequests] = useState<ManualDepositRequest[]>([]);
@@ -112,9 +112,11 @@ export const DepositModal: React.FC<DepositModalProps> = ({
 
   const loadData = async () => {
     const firebaseUser = auth.currentUser;
-    setServerMode(Boolean(firebaseUser));
+    const activeUid = currentUser?.uid || firebaseUser?.uid || '';
+    const hasSession = hasBackendSession();
+    setServerMode(hasSession);
 
-    if (firebaseUser) {
+    if (hasSession) {
       try {
         const [configResult, meResult, depositResult, withdrawalResult] = await Promise.all([
           backendApi.getPublicConfig(),
@@ -129,7 +131,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
         const depositRows = ((depositResult as { deposits?: Array<Record<string, any>> }).deposits || []);
         const withdrawalRows = ((withdrawalResult as { withdrawals?: Array<Record<string, any>> }).withdrawals || []);
         setUserRequests(depositRows.map((row) => ({
-          id: String(row.id), userId: firebaseUser.uid, userCode: userProfile?.userCode || '',
+          id: String(row.id), userId: activeUid, userCode: userProfile?.userCode || '',
           userIdentifier: currentUser?.displayName || currentUser?.phoneNumber || '',
           method: row.method, targetNumber: String(row.target_number || ''), senderNumber: String(row.sender_number || ''),
           trxId: String(row.trx_id || ''), amount: Number(row.amount || 0), status: row.status,
@@ -139,7 +141,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
           bonusAmount: Number(row.bonus_amount || 0), totalCredited: Number(row.total_credited || 0),
         })));
         setUserWithdrawals(withdrawalRows.map((row) => ({
-          id: String(row.id), userId: firebaseUser.uid, userCode: userProfile?.userCode || '',
+          id: String(row.id), userId: activeUid, userCode: userProfile?.userCode || '',
           userIdentifier: currentUser?.displayName || currentUser?.phoneNumber || '',
           method: row.method, personalNumber: String(row.personal_number || ''),
           amount: Number(row.amount || 0), status: row.status,
@@ -172,7 +174,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
               withdrawableBalance: calculateWithdrawableBalance(currentBalance, lockedBonus, hasDep, userProfile?.totalDeposited),
               totalDeposited: Number(userProfile?.totalDeposited || 0),
             });
-            const uid = currentUser?.uid || firebaseUser.uid;
+            const uid = currentUser?.uid || firebaseUser?.uid || '';
             const phone = currentUser?.phoneNumber || userPhone;
             setUserRequests(syncedDeposits.filter((r) =>
               Boolean((uid && r.userId === uid) || (phone && (r.senderNumber === phone || r.userIdentifier.includes(phone))))
@@ -391,8 +393,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       soundManager.playCrash();
       return;
     }
-    if (!currentUser || !auth.currentUser) {
-      setSubmissionError('ডিপোজিট করতে Firebase লগইন প্রয়োজন। আবার লগইন করুন।');
+    if (!currentUser || !hasBackendSession()) {
+      setSubmissionError('ডিপোজিট করতে লগইন প্রয়োজন। আবার লগইন করুন।');
       soundManager.playCrash();
       return;
     }
@@ -416,6 +418,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       return;
     }
 
+    const activeUserId = currentUser.uid || auth.currentUser?.uid || '';
     setIsSubmitting(true);
     soundManager.playClick();
     try {
@@ -427,7 +430,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       }) as { deposit?: Record<string, any> };
       const row = result.deposit || {};
       const request: ManualDepositRequest = {
-        id: String(row.id), userId: auth.currentUser.uid,
+        id: String(row.id), userId: activeUserId,
         userCode: userProfile?.userCode || currentUser.userCode || '',
         userIdentifier: currentUser.displayName || currentUser.phoneNumber || '',
         method: row.method || selectedMethod, targetNumber: String(row.target_number || currentGateway.number),
@@ -443,9 +446,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     } catch (err) {
       if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
         const fbRes = await submitManualDepositRequest({
-          userId: auth.currentUser.uid,
+          userId: activeUserId,
           userCode: userProfile?.userCode || currentUser.userCode || '',
-          userIdentifier: currentUser.displayName || currentUser.phoneNumber || currentUser.email || auth.currentUser.uid,
+          userIdentifier: currentUser.displayName || currentUser.phoneNumber || currentUser.email || activeUserId,
           method: selectedMethod,
           targetNumber: currentGateway.number,
           senderNumber: cleanSender,
@@ -489,8 +492,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       soundManager.playCrash();
       return;
     }
-    if (!currentUser || !auth.currentUser) {
-      setWithdrawError('উইথড্র করতে Firebase লগইন প্রয়োজন।');
+    if (!currentUser || !hasBackendSession()) {
+      setWithdrawError('উইথড্র করতে লগইন প্রয়োজন।');
       soundManager.playCrash();
       return;
     }
@@ -509,6 +512,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       return;
     }
 
+    const activeUserId = currentUser.uid || auth.currentUser?.uid || '';
     setIsWithdrawSubmitting(true);
     soundManager.playClick();
     try {
@@ -516,14 +520,14 @@ export const DepositModal: React.FC<DepositModalProps> = ({
         method: selectedWithdrawMethod,
         personalNumber: cleanPhone,
         amount: withdrawAmount,
-        idempotencyKey: `wth-${auth.currentUser.uid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        idempotencyKey: `wth-${activeUserId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       }) as { withdrawal?: Record<string, any>; wallet?: { balance: number; inviteBonusLocked: number; withdrawableBalance: number; totalDeposited: number } };
       if (result.wallet) {
         setServerWallet(result.wallet);
       }
       const row = result.withdrawal || {};
       setWithdrawSuccess({
-        id: String(row.id), userId: auth.currentUser.uid,
+        id: String(row.id), userId: activeUserId,
         userCode: userProfile?.userCode || currentUser.userCode || '',
         userIdentifier: currentUser.displayName || currentUser.phoneNumber || '',
         method: row.method || selectedWithdrawMethod, personalNumber: String(row.personal_number || cleanPhone),
@@ -536,9 +540,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     } catch (err) {
       if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
         const fbRes = await submitManualWithdrawalRequest({
-          userId: auth.currentUser.uid,
+          userId: activeUserId,
           userCode: userProfile?.userCode || currentUser.userCode || '',
-          userIdentifier: currentUser.displayName || currentUser.phoneNumber || currentUser.email || auth.currentUser.uid,
+          userIdentifier: currentUser.displayName || currentUser.phoneNumber || currentUser.email || activeUserId,
           method: selectedWithdrawMethod,
           personalNumber: cleanPhone,
           amount: withdrawAmount,

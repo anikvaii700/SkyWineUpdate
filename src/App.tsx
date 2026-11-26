@@ -43,7 +43,7 @@ import {
   SystemPaymentSettings,
 } from './services/manualPayment';
 import { soundManager } from './services/audio';
-import { ApiClientError, backendApi, mapBackendMeToProfile } from './services/backendApi';
+import { ApiClientError, backendApi, hasBackendAuthToken, hasBackendSession, mapBackendMeToProfile } from './services/backendApi';
 import { Language, translations } from './utils/i18n';
 import { auth, UserWalletProfile } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -464,7 +464,6 @@ export default function App() {
           const me = await backendApi.getMe();
           const profile = mapBackendMeToProfile(me, user);
           const isPhoneAlias = /^user_01[0-9]{9}@phone\.aviator\.bd$/i.test(user.email || '');
-          const isFacebookProvider = user.providerData?.some((p) => p.providerId === 'facebook.com') ?? false;
           const isGoogleProvider = user.providerData?.some((p) => p.providerId === 'google.com') ?? false;
           const appUser: AppUser = {
             uid: user.uid,
@@ -474,7 +473,7 @@ export default function App() {
             email: user.email,
             phoneNumber: me.user.phoneNumber || user.phoneNumber || null,
             photoURL: user.photoURL,
-            provider: isPhoneAlias ? 'phone' : isFacebookProvider ? 'facebook' : isGoogleProvider ? 'google' : 'email',
+            provider: isPhoneAlias ? 'phone' : isGoogleProvider ? 'google' : 'email',
             isAdmin: me.user.isAdmin === true,
             status: me.user.status as AppUser['status'],
           };
@@ -514,7 +513,7 @@ export default function App() {
           serverWalletBalanceRef.current = null;
           setAuthNoticeMessage('সার্ভারের সাথে সংযোগ হয়নি। কিছুক্ষণ পর আবার লগইন করুন।');
         }
-      } else {
+      } else if (!hasBackendAuthToken()) {
         setCurrentUser(null);
         setUserProfile(null);
         setBalance(0);
@@ -573,7 +572,7 @@ export default function App() {
     };
 
     const updatePendingCount = () => {
-      if (currentUser?.isAdmin !== true || !auth.currentUser) {
+      if (currentUser?.isAdmin !== true || !hasBackendSession()) {
         setPendingDepositCount(0);
         return;
       }
@@ -605,7 +604,7 @@ export default function App() {
         soundManager.playWin();
         const amt = Math.round(detail.bonusAmount * 100) / 100;
 
-        if (auth.currentUser) {
+        if (hasBackendSession()) {
           // PostgreSQL approval flow credits the same wallet ledger. Refresh that one balance
           // instead of adding a second client-side copy of the referral bonus.
           void backendApi.getMe().then((me) => {
@@ -709,7 +708,7 @@ export default function App() {
   // Poll the PostgreSQL ledger for approval/rejection notifications.
   // The server wallet is intentionally kept separate from the local practice-game balance.
   useEffect(() => {
-    if (!currentUser || !auth.currentUser) return;
+    if (!currentUser || !hasBackendSession()) return;
 
     let cancelled = false;
     let running = false;
@@ -718,7 +717,7 @@ export default function App() {
     let initialLoad = true;
 
     const refreshServerLedger = async () => {
-      if (running || !auth.currentUser) return;
+      if (running || !hasBackendSession()) return;
       running = true;
       try {
         const [depositResult, withdrawalResult, me] = await Promise.all([
@@ -2151,7 +2150,7 @@ export default function App() {
           setCurrentUser(user);
           setUserProfile(profile);
           const serverBase = profile.balance || 0;
-          if (auth.currentUser) serverWalletBalanceRef.current = serverBase;
+          if (hasBackendSession()) serverWalletBalanceRef.current = serverBase;
           const restoredBalance = Math.max(
             0,
             Math.round((serverBase + getLocalWalletAdjustment(user.uid)) * 100) / 100
@@ -2179,7 +2178,7 @@ export default function App() {
         onClose={() => setIsAdminOpen(false)}
         initialTab={adminPanelInitialTab}
         onBalanceAdjusted={() => {
-          if (!auth.currentUser) return;
+          if (!hasBackendSession()) return;
           void backendApi.getMe()
             .then((me) => setUserProfile(mapBackendMeToProfile(me, auth.currentUser)))
             .catch((err) => {

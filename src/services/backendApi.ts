@@ -15,6 +15,21 @@ export class ApiClientError extends Error {
   }
 }
 
+// Holds custom phone-session Bearer token strictly in JS memory (never in localStorage/sessionStorage).
+let memoryAuthToken: string | null = null;
+
+export function setBackendAuthToken(token: string | null): void {
+  memoryAuthToken = token ? token.trim() : null;
+}
+
+export function hasBackendAuthToken(): boolean {
+  return Boolean(memoryAuthToken);
+}
+
+export function hasBackendSession(): boolean {
+  return Boolean(auth.currentUser || memoryAuthToken);
+}
+
 async function getAuthHeaders(requireAuth = true): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -22,11 +37,14 @@ async function getAuthHeaders(requireAuth = true): Promise<Record<string, string
 
   if (requireAuth) {
     const user = auth.currentUser;
-    if (!user) {
-      throw new ApiClientError(401, 'NOT_SIGNED_IN', 'Please sign in with Firebase first.');
+    if (user) {
+      const token = await user.getIdToken();
+      headers.Authorization = `Bearer ${token}`;
+    } else if (memoryAuthToken) {
+      headers.Authorization = `Bearer ${memoryAuthToken}`;
+    } else {
+      throw new ApiClientError(401, 'NOT_SIGNED_IN', 'Please sign in first.');
     }
-    const token = await user.getIdToken();
-    headers.Authorization = `Bearer ${token}`;
   }
 
   return headers;
@@ -192,7 +210,25 @@ export const backendApi = {
       requireAuth: false,
     }),
 
-  phoneLogin: (phone: string, password: string) => apiRequest<{ ok: boolean; customToken: string }>('/api/auth/phone-login', { method: 'POST', body: { phone, password }, requireAuth: false }),
+  phoneSignup: (payload: {
+    phone: string;
+    password: string;
+    displayName?: string;
+    referralCode?: string;
+  }) =>
+    apiRequest<{ ok: boolean; token: string } & BackendMeResponse>('/api/auth/phone-signup', {
+      method: 'POST',
+      body: payload,
+      requireAuth: false,
+    }),
+
+  phoneLogin: (payload: { phone: string; password: string; referralCode?: string }) =>
+    apiRequest<{ ok: boolean; token: string } & BackendMeResponse>('/api/auth/phone-login', {
+      method: 'POST',
+      body: payload,
+      requireAuth: false,
+    }),
+
   sendEmailOtp: (email: string) => apiRequest<{ ok: boolean; message: string }>('/api/auth/email-otp/send', { method: 'POST', body: { email }, requireAuth: false }),
   verifyEmailOtp: (email: string, code: string) => apiRequest<{ ok: boolean; verified: boolean }>('/api/auth/email-otp/verify', { method: 'POST', body: { email, code }, requireAuth: false }),
 

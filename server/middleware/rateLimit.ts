@@ -27,6 +27,17 @@ export const emailOtpVerifyLimiter = rateLimit({
   message: { error: 'Too many OTP verification attempts. Please wait.', code: 'OTP_RATE_LIMITED' },
 });
 
+export const phoneAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    error: 'অনেকবার চেষ্টা করা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।',
+    code: 'AUTH_RATE_LIMITED',
+  },
+});
+
 export const financialMutationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 25,

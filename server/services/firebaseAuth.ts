@@ -2,6 +2,7 @@ import { getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { env } from '../config/env.ts';
 import { HttpError } from '../middleware/errorHandler.ts';
+import { verifyPhoneSessionToken } from './phoneAuth.ts';
 
 export interface VerifiedFirebaseIdentity {
   uid: string;
@@ -29,6 +30,10 @@ export function getFirebaseAdminAuth() {
 export const defaultTokenVerifier: TokenVerifier = async (idToken: string): Promise<VerifiedFirebaseIdentity> => {
   if (!idToken || idToken.length < 20 || idToken.length > 8192) {
     throw new HttpError(401, 'INVALID_TOKEN', 'Invalid authentication token.');
+  }
+
+  if (idToken.startsWith('skywin_phone_v1.')) {
+    return verifyPhoneSessionToken(idToken);
   }
 
   try {

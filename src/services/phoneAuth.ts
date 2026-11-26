@@ -1,5 +1,5 @@
 import { UserWalletProfile, db, getOrCreateUserProfile, signUpWithPhone, signInWithPhone, logoutUser } from './firebase';
-import { ApiClientError, backendApi, mapBackendMeToProfile } from './backendApi';
+import { ApiClientError, backendApi, mapBackendMeToProfile, setBackendAuthToken } from './backendApi';
 import type { User as FirebaseUser } from 'firebase/auth';
 import { doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
 import { recordAccountRegistrationOnDevice } from './deviceSecurity';
@@ -12,7 +12,7 @@ export interface AppUser {
   email: string | null;
   phoneNumber: string | null;
   photoURL: string | null;
-  provider: 'google' | 'facebook' | 'phone' | 'email';
+  provider: 'google' | 'phone' | 'email';
   /** Server-verified PostgreSQL role returned by /api/me. */
   isAdmin?: boolean;
   status?: 'active' | 'suspended' | 'banned';
@@ -231,7 +231,6 @@ async function getServerEmailAccount(fallbackName?: string): Promise<{ user: App
   const me = await backendApi.getMe();
   const firebaseUser = (await import('./firebase')).auth.currentUser;
   const profile = mapBackendMeToProfile(me, firebaseUser);
-  const isFacebookProvider = firebaseUser?.providerData?.some((p) => p.providerId === 'facebook.com') ?? false;
   const isGoogleProvider = firebaseUser?.providerData?.some((p) => p.providerId === 'google.com') ?? false;
   const user: AppUser = {
     uid: me.user.uid,
@@ -241,7 +240,7 @@ async function getServerEmailAccount(fallbackName?: string): Promise<{ user: App
     email: me.user.email || firebaseUser?.email || null,
     phoneNumber: me.user.phoneNumber || null,
     photoURL: firebaseUser?.photoURL || null,
-    provider: isFacebookProvider ? 'facebook' : isGoogleProvider ? 'google' : 'email',
+    provider: isGoogleProvider ? 'google' : 'email',
     isAdmin: me.user.isAdmin === true,
     status: me.user.status as AppUser['status'],
   };
@@ -261,7 +260,6 @@ export async function buildFirestoreFallbackSession(
     referralCodeInput
   );
   const isPhoneAlias = /^user_01[0-9]{9}@phone\.aviator\.bd$/i.test(firebaseUser.email || '');
-  const isFacebookProvider = firebaseUser.providerData?.some((p) => p.providerId === 'facebook.com') ?? false;
   const isGoogleProvider = firebaseUser.providerData?.some((p) => p.providerId === 'google.com') ?? false;
   const user: AppUser = {
     uid: firebaseUser.uid,
@@ -271,7 +269,7 @@ export async function buildFirestoreFallbackSession(
     email: firebaseUser.email,
     phoneNumber: profile.phoneNumber || firebaseUser.phoneNumber || phoneHint || null,
     photoURL: firebaseUser.photoURL,
-    provider: isPhoneAlias ? 'phone' : isFacebookProvider ? 'facebook' : isGoogleProvider ? 'google' : 'email',
+    provider: isPhoneAlias ? 'phone' : isGoogleProvider ? 'google' : 'email',
     // Never elevate admin role client-side when backend is unreachable.
     isAdmin: false,
     status: profile.status || 'active',
@@ -295,6 +293,7 @@ export async function registerEmailAccount(
   }
 
   try {
+    setBackendAuthToken(null);
     const { signUpWithEmail } = await import('./firebase');
     const firebaseUser = await signUpWithEmail(normalizedEmail, pass, fullName);
 
@@ -350,6 +349,7 @@ export async function loginEmailAccount(
   }
 
   try {
+    setBackendAuthToken(null);
     const { signInWithEmail } = await import('./firebase');
     const firebaseUser = await signInWithEmail(normalizedEmail, pass);
 
@@ -390,6 +390,98 @@ export async function loginEmailAccount(
   }
 }
 
+// Sign up directly with Bangladeshi Mobile Number (01XXXXXXXXX) and Password
+export async function registerPhoneAccount(
+  phone: string,
+  pass: string,
+  fullName?: string,
+  referralCodeInput?: string
+): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
+  const { cleanPhone } = normalizePhoneNumber(phone);
+  if (!/^01[3-9][0-9]{8}$/.test(cleanPhone)) {
+    return { success: false, error: 'সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 017XXXXXXXX)।' };
+  }
+  if (!pass || pass.length < 6) {
+    return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
+  }
+
+  try {
+    const res = await backendApi.phoneSignup({
+      phone: cleanPhone,
+      password: pass,
+      ...(fullName?.trim() ? { displayName: fullName.trim() } : {}),
+      ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
+    });
+    await logoutUser().catch(() => {});
+    setBackendAuthToken(res.token);
+    const profile = mapBackendMeToProfile(res, null);
+    const user: AppUser = {
+      uid: res.user.uid,
+      userCode: res.user.userCode,
+      referralCode: res.user.referralCode,
+      displayName: res.user.displayName || fullName?.trim() || `User ${cleanPhone}`,
+      email: res.user.email || null,
+      phoneNumber: res.user.phoneNumber || cleanPhone,
+      photoURL: null,
+      provider: 'phone',
+      isAdmin: res.user.isAdmin === true,
+      status: res.user.status as AppUser['status'],
+    };
+    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+    return { success: true, user, profile };
+  } catch (err) {
+    if (err instanceof ApiClientError) {
+      return { success: false, error: err.message };
+    }
+    return { success: false, error: err instanceof Error ? err.message : 'অ্যাকাউন্ট তৈরি করা যায়নি।' };
+  }
+}
+
+// Login directly with Bangladeshi Mobile Number (01XXXXXXXXX) and Password
+export async function loginPhoneAccount(
+  phone: string,
+  pass: string,
+  referralCodeInput?: string
+): Promise<{ success: boolean; user?: AppUser; profile?: UserWalletProfile; error?: string }> {
+  const { cleanPhone } = normalizePhoneNumber(phone);
+  if (!/^01[3-9][0-9]{8}$/.test(cleanPhone)) {
+    return { success: false, error: 'সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 017XXXXXXXX)।' };
+  }
+  if (!pass || pass.length < 6) {
+    return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
+  }
+
+  try {
+    const res = await backendApi.phoneLogin({
+      phone: cleanPhone,
+      password: pass,
+      ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
+    });
+    await logoutUser().catch(() => {});
+    setBackendAuthToken(res.token);
+    const profile = mapBackendMeToProfile(res, null);
+    const user: AppUser = {
+      uid: res.user.uid,
+      userCode: res.user.userCode,
+      referralCode: res.user.referralCode,
+      displayName: res.user.displayName || `User ${cleanPhone}`,
+      email: res.user.email || null,
+      phoneNumber: res.user.phoneNumber || cleanPhone,
+      photoURL: null,
+      provider: 'phone',
+      isAdmin: res.user.isAdmin === true,
+      status: res.user.status as AppUser['status'],
+    };
+    try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+    return { success: true, user, profile };
+  } catch (err) {
+    if (err instanceof ApiClientError) {
+      return { success: false, error: err.message };
+    }
+    return { success: false, error: err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।' };
+  }
+}
+
 // Get currently active phone session on app load
 export function getActivePhoneSession(): { user: AppUser; profile: UserWalletProfile } | null {
   // Phone sessions now come from Firebase Auth persistence, never browser Local Storage.
@@ -398,6 +490,7 @@ export function getActivePhoneSession(): { user: AppUser; profile: UserWalletPro
 
 // Logout phone user
 export function logoutPhoneSession(): void {
+  setBackendAuthToken(null);
   try {
     localStorage.removeItem(STORAGE_SESSION_KEY);
     localStorage.removeItem(STORAGE_ACCOUNTS_KEY);

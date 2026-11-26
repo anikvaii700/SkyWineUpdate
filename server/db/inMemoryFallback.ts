@@ -140,6 +140,15 @@ interface EmailOtpRow {
   consumed_at: Date | null;
 }
 
+interface PhoneAccountRow {
+  phone_number: string;
+  user_uid: string;
+  password_hash: string;
+  password_salt: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 interface StoreState {
   users: Map<string, UserRow>;
   wallets: Map<string, WalletRow>;
@@ -151,6 +160,7 @@ interface StoreState {
   auditLogs: AuditLogRow[];
   auditLogSeq: number;
   emailOtps: Map<string, EmailOtpRow>;
+  phoneAccounts: Map<string, PhoneAccountRow>;
 }
 
 function createDefaultPaymentSettings(): PaymentSettingsRow {
@@ -199,6 +209,7 @@ function cloneStore(src: StoreState): StoreState {
     auditLogs: src.auditLogs.map((l) => ({ ...l })),
     auditLogSeq: src.auditLogSeq,
     emailOtps: new Map(Array.from(src.emailOtps.entries()).map(([k, v]) => [k, { ...v }])),
+    phoneAccounts: new Map(Array.from(src.phoneAccounts.entries()).map(([k, v]) => [k, { ...v }])),
   };
 }
 
@@ -213,6 +224,7 @@ let activeStore: StoreState = {
   auditLogs: [],
   auditLogSeq: 1,
   emailOtps: new Map(),
+  phoneAccounts: new Map(),
 };
 
 function makeResult<T extends QueryResultRow>(rows: unknown[]): QueryResult<T> {
@@ -302,6 +314,11 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
   if (sql.startsWith('SELECT firebase_uid, user_code, email, display_name, phone_number, role, status, referral_code, referred_by_uid, first_deposit_rewarded, created_at, updated_at FROM users WHERE firebase_uid = $1')) {
     const u = store.users.get(String(params[0]));
     return makeResult<T>(u ? [{ ...u }] : []);
+  }
+
+  if (sql.startsWith("SELECT firebase_uid FROM users WHERE role = 'admin' LIMIT 1")) {
+    const admin = Array.from(store.users.values()).find((u) => u.role === 'admin');
+    return makeResult<T>(admin ? [{ firebase_uid: admin.firebase_uid }] : []);
   }
 
   if (sql.startsWith('SELECT firebase_uid FROM users WHERE UPPER(referral_code) = $1')) {
@@ -917,6 +934,33 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
   if (sql.startsWith('DELETE FROM email_verification_otps WHERE email = $1')) {
     store.emailOtps.delete(String(params[0]));
     return makeResult<T>([]);
+  }
+
+  // phone_accounts
+  if (sql.startsWith('SELECT * FROM phone_accounts WHERE phone_number = $1')) {
+    const row = store.phoneAccounts.get(String(params[0]));
+    return makeResult<T>(row ? [{ ...row }] : []);
+  }
+
+  if (sql.startsWith('INSERT INTO phone_accounts (')) {
+    const phoneNumber = String(params[0]);
+    const userUid = String(params[1]);
+    if (store.phoneAccounts.has(phoneNumber)) {
+      const err = new Error('Duplicate phone_number') as Error & { code?: string };
+      err.code = '23505';
+      throw err;
+    }
+    const now = new Date();
+    const row: PhoneAccountRow = {
+      phone_number: phoneNumber,
+      user_uid: userUid,
+      password_hash: String(params[2]),
+      password_salt: String(params[3]),
+      created_at: now,
+      updated_at: now,
+    };
+    store.phoneAccounts.set(phoneNumber, row);
+    return makeResult<T>([{ ...row }]);
   }
 
   console.warn('[InMemoryDB] Unhandled SQL query:', sql);

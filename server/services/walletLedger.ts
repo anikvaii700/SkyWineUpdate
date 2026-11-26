@@ -227,7 +227,16 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
       `SELECT * FROM users WHERE firebase_uid = $1 FOR UPDATE`,
       [identity.uid]
     );
-    const bootstrapAdmin = isBootstrapAdmin(identity);
+    const hasExplicitAdminConfig = env.adminEmails.length > 0 || env.adminPhones.length > 0;
+    let bootstrapAdmin = isBootstrapAdmin(identity);
+    if (!bootstrapAdmin && !hasExplicitAdminConfig && identity.email && identity.emailVerified) {
+      const existingAdmins = await client.query(
+        `SELECT firebase_uid FROM users WHERE role = 'admin' LIMIT 1`
+      );
+      if (existingAdmins.rows.length === 0) {
+        bootstrapAdmin = true;
+      }
+    }
 
     if (existing.rows.length > 0) {
       const current = mapUserRow(existing.rows[0]);

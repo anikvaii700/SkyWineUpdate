@@ -8,7 +8,6 @@ import {
   Database,
   Cloud,
   RotateCcw,
-  Mail,
   Lock,
   Eye,
   EyeOff,
@@ -21,25 +20,24 @@ import {
   Share2,
   AlertCircle,
   Link2,
+  Phone,
 } from 'lucide-react';
 import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../services/userManagement';
 import {
   signInWithGoogle,
-  signInWithFacebook,
-  requestPasswordReset,
   logoutUser as firebaseLogout,
   UserWalletProfile,
 } from '../services/firebase';
 import {
   AppUser,
   buildFirestoreFallbackSession,
-  registerEmailAccount,
-  loginEmailAccount,
+  registerPhoneAccount,
+  loginPhoneAccount,
   logoutPhoneSession,
 } from '../services/phoneAuth';
 import { buildReferralLink, getPendingReferralCode } from '../services/referralService';
 import { soundManager } from '../services/audio';
-import { ApiClientError, backendApi, mapBackendMeToProfile } from '../services/backendApi';
+import { ApiClientError, backendApi, mapBackendMeToProfile, setBackendAuthToken } from '../services/backendApi';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -68,7 +66,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [authMode, setAuthMode] = useState<AuthMode>('login');
 
   // Form states
-  const [email, setEmail] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -97,14 +95,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
-  // 1-Click Social Sign-In (Google or Facebook)
-  const handleSocialLogin = async (provider: 'google' | 'facebook') => {
+  // 1-Click Google Sign-In
+  const handleGoogleLogin = async () => {
     setIsLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
     soundManager.playClick();
     try {
-      const fbUser = provider === 'google' ? await signInWithGoogle() : await signInWithFacebook();
+      setBackendAuthToken(null);
+      const fbUser = await signInWithGoogle();
       if (fbUser) {
         const refToApply = referralCodeInput.trim() || getPendingReferralCode();
         let appUser: AppUser;
@@ -123,11 +122,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             uid: fbUser.uid,
             userCode: me.user.userCode,
             referralCode: me.user.referralCode || me.user.userCode,
-            displayName: me.user.displayName || fbUser.displayName || (provider === 'facebook' ? 'Facebook Player' : 'Google Player'),
+            displayName: me.user.displayName || fbUser.displayName || 'Google Player',
             email: fbUser.email,
             phoneNumber: me.user.phoneNumber || fbUser.phoneNumber || null,
             photoURL: fbUser.photoURL,
-            provider,
+            provider: 'google',
             isAdmin: me.user.isAdmin === true,
             status: me.user.status as AppUser['status'],
           };
@@ -142,33 +141,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
         soundManager.playWin();
         onLoginSuccess(appUser, profile);
-        setSuccessMsg(
-          provider === 'facebook'
-            ? 'Facebook দিয়ে লগইন সফল হয়েছে!'
-            : 'Google দিয়ে লগইন সফল হয়েছে!'
-        );
+        setSuccessMsg('Google দিয়ে লগইন সফল হয়েছে!');
         onClose();
       }
     } catch (err: unknown) {
-      console.warn(`${provider} sign-in attempt:`, err);
+      console.warn('google sign-in attempt:', err);
       const code = (err as { code?: string })?.code || '';
+      const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
+
       if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
         setErrorMsg('লগইন পপআপ বন্ধ করা হয়েছে। আবার চেষ্টা করুন।');
       } else if (code === 'auth/popup-blocked') {
         setErrorMsg('ব্রাউজারে পপআপ ব্লক করা আছে। পপআপ অনুমতি দিয়ে আবার চেষ্টা করুন।');
+      } else if (code === 'auth/unauthorized-domain') {
+        setErrorMsg(
+          `এই ডোমেইনটি (${currentHost}) Firebase Authorized Domains-এ যুক্ত নেই। Firebase Console → Authentication → Settings → Authorized domains-এ "${currentHost}" যোগ করুন।`
+        );
       } else if (code === 'auth/account-exists-with-different-credential') {
         setErrorMsg('এই ইমেইলটি আগে থেকেই অন্য লগইন মাধ্যম (যেমন Google বা ইমেইল পাসওয়ার্ড) দিয়ে যুক্ত আছে। ওই মাধ্যম দিয়ে লগইন করুন।');
       } else if (code === 'auth/operation-not-allowed') {
-        setErrorMsg(
-          provider === 'facebook'
-            ? 'Firebase Console-এ Facebook Sign-in চালু করা নেই। Authentication → Sign-in method থেকে Facebook সক্রিয় করুন।'
-            : 'Firebase Console-এ Google Sign-in চালু করা নেই।'
-        );
+        setErrorMsg('Firebase Console-এ Google Sign-in চালু করা নেই। Authentication → Sign-in method থেকে Google সক্রিয় করুন।');
+      } else if (code === 'auth/network-request-failed') {
+        setErrorMsg('নেটওয়ার্ক সমস্যার কারণে Firebase-এর সাথে সংযোগ করা যায়নি। ইন্টারনেট সংযোগ যাচাই করে আবার চেষ্টা করুন।');
+      } else if (code === 'auth/web-storage-unsupported') {
+        setErrorMsg('ব্রাউজারে কুকি বা স্টোরেজ ব্লক করা আছে। থার্ড-পার্টি কুকিজ অনুমতি দিয়ে বা নতুন ট্যাবে খুলে চেষ্টা করুন।');
+      } else if (err instanceof ApiClientError) {
+        setErrorMsg(err.message || `Google দিয়ে লগইন যাচাই করতে সমস্যা হয়েছে (${err.code})।`);
       } else {
         setErrorMsg(
-          provider === 'facebook'
-            ? 'Facebook দিয়ে সাইনআপ/লগইন করতে ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'
-            : 'Google দিয়ে সাইনআপ/লগইন করতে ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'
+          `Google দিয়ে সাইনআপ/লগইন করতে ব্যর্থ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।${code ? ` (${code})` : ''}`
         );
       }
     } finally {
@@ -176,15 +177,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Gmail & Password Sign-Up & Login
-  const handleEmailSubmit = async (e: React.FormEvent) => {
+  // Mobile Number & Password Sign-Up & Login
+  const handleCredentialSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setErrorMsg('সঠিক জিমেইল ঠিকানা দিন।');
+    const cleanDigits = phoneNumber.replace(/[^0-9]/g, '');
+    const normalized = cleanDigits.startsWith('880') ? '0' + cleanDigits.slice(3) : cleanDigits;
+    if (!/^01[3-9][0-9]{8}$/.test(normalized)) {
+      setErrorMsg('সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 017XXXXXXXX)।');
       return;
     }
 
@@ -203,9 +205,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       if (authMode === 'signup') {
-        const res = await registerEmailAccount(trimmedEmail, password, fullName, referralCodeInput);
+        const res = await registerPhoneAccount(normalized, password, fullName, referralCodeInput);
         if (!res.success || !res.user || !res.profile) {
-          setErrorMsg(res.error || 'অ্যাকাউন্ট তৈরি করা যায়নি');
+          setErrorMsg(res.error || 'অ্যাকাউন্ট তৈরি করা যায়নি।');
           if (res.error?.includes('আগে থেকেই')) {
             setAuthMode('login');
           }
@@ -213,41 +215,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
 
         soundManager.playWin();
-        setSuccessMsg('জিমেইল দিয়ে সাইনআপ সফল হয়েছে!');
+        setSuccessMsg('মোবাইল নাম্বার দিয়ে সাইনআপ সফল হয়েছে!');
         onLoginSuccess(res.user, res.profile);
         onClose();
       } else {
-        const res = await loginEmailAccount(trimmedEmail, password, referralCodeInput);
+        const res = await loginPhoneAccount(normalized, password, referralCodeInput);
         if (!res.success || !res.user || !res.profile) {
           setErrorMsg(res.error || 'লগইন ব্যর্থ হয়েছে।');
           return;
         }
 
         soundManager.playWin();
-        setSuccessMsg('জিমেইল দিয়ে লগইন সফল হয়েছে!');
+        setSuccessMsg('মোবাইল নাম্বার দিয়ে লগইন সফল হয়েছে!');
         onLoginSuccess(res.user, res.profile);
         onClose();
       }
     } catch (err: unknown) {
-      console.warn('Email auth notice:', err);
+      console.warn('Phone auth notice:', err);
       setErrorMsg('প্রক্রিয়া সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handlePasswordReset = async () => {
-    if (!email.trim()) {
-      setErrorMsg('পাসওয়ার্ড রিসেটের জন্য জিমেইল ঠিকানা লিখুন।');
-      return;
-    }
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      await requestPasswordReset(email);
-      setSuccessMsg('পাসওয়ার্ড রিসেট লিংক আপনার জিমেইলে পাঠানো হয়েছে।');
-    } catch {
-      setErrorMsg('রিসেট লিংক পাঠানো যায়নি। জিমেইল ঠিকানা যাচাই করুন।');
     } finally {
       setIsLoading(false);
     }
@@ -315,14 +300,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                   {currentUser.email ? (
                     <p className="text-xs text-slate-400 truncate">{currentUser.email}</p>
+                  ) : currentUser.phoneNumber ? (
+                    <p className="text-xs text-slate-400 truncate font-mono">{currentUser.phoneNumber}</p>
                   ) : null}
                   <div className="flex items-center gap-1 text-[11px] text-emerald-400 mt-1 font-mono">
                     <Cloud className="w-3 h-3" />
                     <span>
                       {currentUser.provider === 'google'
                         ? 'Google Cloud Sync Active'
-                        : currentUser.provider === 'facebook'
-                        ? 'Facebook Cloud Sync Active'
+                        : currentUser.provider === 'phone'
+                        ? 'Mobile Account Active'
                         : 'Gmail Cloud Sync Active'}
                     </span>
                   </div>
@@ -515,7 +502,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               )}
 
               <div className="rounded-xl border border-emerald-700/40 bg-emerald-950/20 px-3 py-2 text-center text-xs text-emerald-300">
-                Google, Facebook অথবা জিমেইল ও পাসওয়ার্ড দিয়ে প্রবেশ করুন
+                Google অথবা মোবাইল নাম্বার ও পাসওয়ার্ড দিয়ে প্রবেশ করুন
               </div>
 
               {errorMsg && (
@@ -530,13 +517,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               )}
 
-              {/* 1-CLICK GOOGLE & FACEBOOK LOGIN */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* 1-CLICK GOOGLE LOGIN */}
+              <div className="space-y-1.5">
                 <button
                   type="button"
-                  onClick={() => handleSocialLogin('google')}
+                  onClick={handleGoogleLogin}
                   disabled={isLoading}
-                  className="w-full py-2.5 px-3 bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs rounded-xl shadow-md active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                  className="w-full py-3 px-4 bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs rounded-xl shadow-md active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
                   <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                     <path
@@ -558,32 +545,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </svg>
                   <span>Google দিয়ে লগইন</span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSocialLogin('facebook')}
-                  disabled={isLoading}
-                  className="w-full py-2.5 px-3 bg-[#1877F2] hover:bg-[#166FE5] text-white font-bold text-xs rounded-xl shadow-md active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-                >
-                  <svg className="w-4 h-4 shrink-0 fill-current" viewBox="0 0 24 24">
-                    <path d="M22.675 0H1.325C.593 0 0 .593 0 1.325v21.351C0 23.407.593 24 1.325 24H12.82v-9.294H9.692v-3.622h3.128V8.413c0-3.1 1.893-4.788 4.659-4.788 1.325 0 2.463.099 2.795.143v3.24l-1.918.001c-1.504 0-1.795.715-1.795 1.763v2.313h3.587l-.467 3.622h-3.12V24h6.116c.73 0 1.323-.593 1.323-1.325V1.325C24 .593 23.407 0 22.675 0z" />
-                  </svg>
-                  <span>Facebook দিয়ে লগইন</span>
-                </button>
+                <p className="text-[10px] text-center text-slate-400">
+                  Gmail অ্যাকাউন্ট (পাসওয়ার্ড ছাড়া) সরাসরি প্রবেশ করতে উপরের বাটনে ক্লিক করুন
+                </p>
               </div>
 
               <div className="relative flex items-center py-1">
                 <div className="grow border-t border-[#222e43]" />
                 <span className="shrink mx-3 text-[11px] font-semibold text-slate-400">
-                  অথবা মেইল ও পাসওয়ার্ড দিয়ে
+                  অথবা মোবাইল নাম্বার ও পাসওয়ার্ড দিয়ে
                 </span>
                 <div className="grow border-t border-[#222e43]" />
               </div>
 
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs text-slate-300 font-medium">
+              <div className="flex items-center justify-between gap-2 px-1">
+                <span className="text-xs font-semibold text-slate-300">
                   {authMode === 'signup' ? 'নতুন অ্যাকাউন্ট খুলুন:' : 'বিদ্যমান অ্যাকাউন্টে প্রবেশ করুন:'}
                 </span>
+
                 <div className="flex gap-1 bg-[#151c2a] p-0.5 rounded-lg border border-[#222e43]">
                   <button type="button" onClick={() => { setAuthMode('signup'); setErrorMsg(null); setSuccessMsg(null); }}
                     className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'signup' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
@@ -596,20 +575,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
 
-              {/* EMAIL & PASSWORD SIGNUP & LOGIN */}
+              {/* MOBILE NUMBER & PASSWORD SIGNUP & LOGIN */}
               <div className="space-y-4">
                 <div className="bg-[#0b0e15] border border-[#1d273a] rounded-2xl p-3 flex items-center gap-3">
                   <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                    <Mail className="w-4 h-4" />
+                    <Phone className="w-4 h-4" />
                   </div>
                   <p className="text-xs text-slate-300 leading-snug">
                     {authMode === 'signup'
-                      ? 'আপনার মেইল এড্রেস ও পাসওয়ার্ড দিয়ে নতুন অ্যাকাউন্ট খুলুন।'
-                      : 'আপনার নিবন্ধিত মেইল এড্রেস ও পাসওয়ার্ড দিয়ে লগইন করুন।'}
+                      ? 'আপনার ১১ ডিজিটের মোবাইল নাম্বার ও পাসওয়ার্ড দিয়ে নতুন অ্যাকাউন্ট খুলুন।'
+                      : 'আপনার নিবন্ধিত মোবাইল নাম্বার ও পাসওয়ার্ড দিয়ে লগইন করুন।'}
                   </p>
                 </div>
 
-                <form onSubmit={handleEmailSubmit} className="space-y-3">
+                <form onSubmit={handleCredentialSubmit} className="space-y-3">
                   {authMode === 'signup' && (
                     <div>
                       <label className="block text-[11px] font-bold text-slate-300 mb-1">
@@ -630,18 +609,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   <div>
                     <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                      মেইল এড্রেস <span className="text-rose-400">*</span>
+                      মোবাইল নাম্বার (১১ ডিজিট) <span className="text-rose-400">*</span>
                     </label>
                     <div className="relative">
-                      <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                      <Phone className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                       <input
-                        type="email"
+                        type="tel"
+                        inputMode="numeric"
                         required
-                        autoComplete="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="example@gmail.com"
-                        className="w-full bg-[#0d121c] border border-[#232f44] rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500 transition-colors"
+                        autoComplete="tel"
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        placeholder="017XXXXXXXX"
+                        className="w-full bg-[#0d121c] border border-[#232f44] rounded-xl pl-9 pr-3 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500 transition-colors"
                       />
                     </div>
                   </div>
@@ -670,14 +650,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </button>
                     </div>
                   </div>
-
-                  {authMode === 'login' && (
-                    <div className="flex flex-wrap gap-3 text-[11px]">
-                      <button type="button" onClick={handlePasswordReset} disabled={isLoading} className="text-sky-400 hover:text-sky-300">
-                        পাসওয়ার্ড ভুলে গেছেন?
-                      </button>
-                    </div>
-                  )}
 
                   {authMode === 'signup' && (
                     <>
@@ -742,8 +714,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       {isLoading
                         ? 'প্রক্রিয়াধীন...'
                         : authMode === 'signup'
-                        ? 'মেইল ও পাসওয়ার্ড দিয়ে সাইনআপ করুন'
-                        : 'মেইল ও পাসওয়ার্ড দিয়ে লগইন করুন'}
+                        ? 'মোবাইল ও পাসওয়ার্ড দিয়ে সাইনআপ করুন'
+                        : 'মোবাইল ও পাসওয়ার্ড দিয়ে লগইন করুন'}
                     </span>
                   </button>
                 </form>

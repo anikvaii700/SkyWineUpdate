@@ -29,7 +29,6 @@ import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../se
 import {
   signInWithGoogle,
   requestPasswordReset,
-  resendEmailVerification,
   logoutUser as firebaseLogout,
   updateUserPhoneNumber,
   getOrCreateUserProfile,

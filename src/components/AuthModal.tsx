@@ -244,7 +244,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const handleVerifyOtp = async () => {
-    if (!/^\\d{6}$/.test(otpCode.trim())) {
+    if (!/^\d{6}$/.test(otpCode.trim())) {
       setErrorMsg('৬ সংখ্যার OTP লিখুন।');
       return;
     }

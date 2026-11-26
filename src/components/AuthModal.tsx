@@ -263,7 +263,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       await backendApi.verifyEmailOtp(email.trim().toLowerCase(), otpCode.trim());
       // Sign in briefly after verification so the backend can create the user row and save the signup phone.
       const { signInWithVerifiedEmail } = await import('../services/firebase');
-      const verifiedUser = await signInWithVerifiedEmail(email, password);
+      await signInWithVerifiedEmail(email, password);
       const { cleanPhone } = normalizePhoneNumber(phoneNumber);
       if (!/^01[0-9]{9}$/.test(cleanPhone)) {
         await firebaseLogout();

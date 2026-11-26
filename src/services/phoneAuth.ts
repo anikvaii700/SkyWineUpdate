@@ -323,12 +323,8 @@ export async function loginPhoneAccount(
       throw err;
     });
     const existingPhone = existingProfile?.user.phoneNumber?.replace(/\D/g, '') || '';
-    if (existingPhone && existingPhone !== cleanPhone) {
-      await (await import('./firebase')).logoutUser();
-      return { success: false, error: 'এই ইমেইল অ্যাকাউন্টের সঙ্গে অন্য মোবাইল নম্বর যুক্ত আছে।' };
-    }
     await backendApi.updateProfile({
-      ...(!existingPhone ? { phoneNumber: cleanPhone } : {}),
+      ...(!existingPhone && /^01[0-9]{9}$/.test(cleanPhone) ? { phoneNumber: cleanPhone } : {}),
       ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
     });
     const account = await getServerPhoneAccount(cleanPhone);

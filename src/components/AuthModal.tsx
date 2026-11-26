@@ -166,15 +166,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    if (authMode === 'signup' && (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))) {
       setErrorMsg('সঠিক ইমেইল ঠিকানা দিন।');
       return;
     }
-
-    const { cleanPhone } = normalizePhoneNumber(phoneNumber);
-    if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
-      setErrorMsg('অনুগ্রহ করে সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 01712345678)');
-      return;
+    if (authMode === 'login') {
+      const value = email.trim();
+      const { cleanPhone } = normalizePhoneNumber(value);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && !/^01[0-9]{9}$/.test(cleanPhone)) {
+        setErrorMsg('সঠিক ইমেইল অথবা ১১ ডিজিটের মোবাইল নম্বর দিন।');
+        return;
+      }
+    } else {
+      const { cleanPhone } = normalizePhoneNumber(phoneNumber);
+      if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
+        setErrorMsg('অনুগ্রহ করে সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 01712345678)');
+        return;
+      }
     }
 
     if (!password || password.length < 6) {
@@ -204,7 +212,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setOtpPending(true);
         setSuccessMsg('আপনার ইমেইলে ৬ সংখ্যার OTP পাঠানো হয়েছে। কোডটি লিখে ইমেইল ভেরিফাই করুন।');
       } else {
-        const res = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
+        const res = await loginPhoneAccount(email, '', password, referralCodeInput);
         if (res.requiresVerification) {
           setOtpPending(true);
           setSuccessMsg(res.error || 'ইমেইলে OTP পাঠানো হয়েছে।');
@@ -738,17 +746,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <div className="relative">
                         <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                         <input
-                          type="email"
+                          type="text"
                           required
-                          autoComplete="email"
+                          autoComplete={authMode === 'login' ? 'username' : 'email'}
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
-                          placeholder="আপনার ইমেইল"
+                          placeholder={authMode === 'login' ? 'ইমেইল অথবা 017xxxxxxxx' : 'আপনার ইমেইল'}
                           className="w-full bg-[#0d121c] border border-[#232f44] rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500 transition-colors"
                         />
                       </div>
                     </div>
-                    <div>
+                    {authMode === 'signup' && <div>
                       <label className="block text-[11px] font-bold text-slate-300 mb-1">
                         মোবাইল নাম্বার (১১ ডিজিট)
                       </label>
@@ -766,7 +774,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                           className="w-full bg-[#0d121c] border border-[#232f44] rounded-xl pl-16 pr-3 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500 transition-colors"
                         />
                       </div>
-                    </div>
+                    </div>}
 
                     <div>
                       <label className="block text-[11px] font-bold text-slate-300 mb-1">

@@ -6,7 +6,7 @@ import { sendEmailVerificationOtp, verifyEmailVerificationOtp } from '../service
 const emailSchema = z.string().trim().email().max(254);
 const verifySchema = z.object({
   email: emailSchema,
-  code: z.string().trim().regex(/^\\d{6}$/),
+  code: z.string().trim().regex(/^\d{6}$/),
 }).strict();
 
 export function createEmailOtpRouter(): Router {

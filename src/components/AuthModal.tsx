@@ -634,69 +634,74 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           ) : (
             /* Logged out state - Multi-method Auth */
             <div className="space-y-4">
-              {/* Notice Banner when redirected from Add Money or Betting */}
-              {noticeMessage && (
-                <div className="bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-red-500/20 border border-amber-500/50 rounded-2xl p-3 flex items-start gap-2.5 text-amber-200 text-xs shadow-md">
-                  <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <span className="font-bold text-amber-300 block mb-0.5">একাউন্ট তৈরি আবশ্যক!</span>
-                    <p className="text-[11px] text-amber-100/95 leading-relaxed">{noticeMessage}</p>
+              {!otpPending && (
+                <>
+                  {/* Notice Banner when redirected from Add Money or Betting */}
+                  {noticeMessage && (
+                    <div className="bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-red-500/20 border border-amber-500/50 rounded-2xl p-3 flex items-start gap-2.5 text-amber-200 text-xs shadow-md">
+                      <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <span className="font-bold text-amber-300 block mb-0.5">একাউন্ট তৈরি আবশ্যক!</span>
+                        <p className="text-[11px] text-amber-100/95 leading-relaxed">{noticeMessage}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border border-emerald-700/40 bg-emerald-950/20 px-3 py-2 text-center text-xs text-emerald-300">
+                    ইমেইল ভেরিফিকেশনসহ মোবাইল অ্যাকাউন্ট
                   </div>
-                </div>
-              )}
 
-              {/* Email + mobile registration is the only supported account method. */}
-              <div className="rounded-xl border border-emerald-700/40 bg-emerald-950/20 px-3 py-2 text-center text-xs text-emerald-300">
-                ইমেইল ভেরিফিকেশনসহ মোবাইল অ্যাকাউন্ট
-              </div>
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-xs text-slate-300 font-medium">
+                      {authMode === 'signup' ? 'নতুন অ্যাকাউন্ট খুলুন:' : 'বিদ্যমান অ্যাকাউন্টে প্রবেশ করুন:'}
+                    </span>
+                    <div className="flex gap-1 bg-[#151c2a] p-0.5 rounded-lg border border-[#222e43]">
+                      <button type="button" onClick={() => { setAuthMode('signup'); setErrorMsg(null); setSuccessMsg(null); }}
+                        className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'signup' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                        সাইনআপ
+                      </button>
+                      <button type="button" onClick={() => { setAuthMode('login'); setErrorMsg(null); setSuccessMsg(null); }}
+                        className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'login' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                        লগইন
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs text-slate-300 font-medium">
-                  {authMode === 'signup' ? 'নতুন অ্যাকাউন্ট খুলুন:' : 'বিদ্যমান অ্যাকাউন্টে প্রবেশ করুন:'}
-                </span>
-                <div className="flex gap-1 bg-[#151c2a] p-0.5 rounded-lg border border-[#222e43]">
-                  <button type="button" onClick={() => { setAuthMode('signup'); setErrorMsg(null); setSuccessMsg(null); }}
-                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'signup' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
-                    সাইনআপ
-                  </button>
-                  <button type="button" onClick={() => { setAuthMode('login'); setErrorMsg(null); setSuccessMsg(null); }}
-                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'login' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
-                    লগইন
-                  </button>
-                </div>
-              </div>
-
-              {/* Feedback messages */}
-              {errorMsg && (
-                <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs leading-relaxed animate-fadeIn">
-                  {errorMsg}
-                </div>
-              )}
-              {successMsg && (
-                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs leading-relaxed flex items-center gap-2 animate-fadeIn">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                  <span>{successMsg}</span>
-                </div>
+                  {errorMsg && (
+                    <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs leading-relaxed animate-fadeIn">
+                      {errorMsg}
+                    </div>
+                  )}
+                  {successMsg && (
+                    <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs leading-relaxed flex items-center gap-2 animate-fadeIn">
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                      <span>{successMsg}</span>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* TAB 1: MOBILE NUMBER SIGNUP & LOGIN */}
               {activeMethod === 'phone' && (
                 <div className="space-y-4">
-                  <div className="bg-[#0b0e15] border border-[#1d273a] rounded-2xl p-3 flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                      <Smartphone className="w-4 h-4" />
+                  {!otpPending && (
+                    <div className="bg-[#0b0e15] border border-[#1d273a] rounded-2xl p-3 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                        <Smartphone className="w-4 h-4" />
+                      </div>
+                      <p className="text-xs text-slate-300 leading-snug">
+                        {authMode === 'signup'
+                          ? 'ইমেইল ভেরিফিকেশন সম্পন্ন করে মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে অ্যাকাউন্ট খুলুন।'
+                          : 'ভেরিফাই করা ইমেইল, মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।'}
+                      </p>
                     </div>
-                    <p className="text-xs text-slate-300 leading-snug">
-                      {authMode === 'signup'
-                        ? 'ইমেইল ভেরিফিকেশন সম্পন্ন করে মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে অ্যাকাউন্ট খুলুন।'
-                        : 'ভেরিফাই করা ইমেইল, মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।'}
-                    </p>
-                  </div>
+                  )}
 
                   {otpPending ? (
                     <div className="space-y-3 rounded-2xl border border-emerald-700/40 bg-[#0b0e15] p-4">
                       <div className="text-center text-sm font-bold text-white">ইমেইল OTP যাচাই</div>
-                      <p className="text-center text-xs text-slate-300">{email} ঠিকানায় পাঠানো ৬ সংখ্যার কোডটি লিখুন। কোড ১০ মিনিট কার্যকর থাকবে।</p>
+                      <p className="text-center text-xs text-slate-300">{email} ঠিকানায় ৬ সংখ্যার কোড লিখুন। কোড ১০ মিনিট কার্যকর থাকবে।</p>
+                      {errorMsg && <p className="rounded-lg bg-rose-950/70 border border-rose-800 px-3 py-2 text-xs text-rose-300">{errorMsg}</p>}
                       <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="৬ সংখ্যার OTP" className="w-full rounded-xl border border-[#232f44] bg-[#0d121c] px-3 py-3 text-center text-xl tracking-[0.5em] text-white" />
                       <button type="button" onClick={handleVerifyOtp} disabled={isLoading || otpCode.length !== 6} className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white disabled:opacity-50">{isLoading ? 'যাচাই হচ্ছে...' : 'OTP যাচাই করুন'}</button>
                       <button type="button" onClick={handleResendVerification} disabled={isLoading} className="w-full py-2 text-xs text-amber-300">আবার OTP পাঠান</button>

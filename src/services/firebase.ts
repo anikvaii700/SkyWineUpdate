@@ -178,17 +178,6 @@ export async function signInWithVerifiedEmail(email: string, pass: string): Prom
   return credential.user;
 }
 
-export async function resendEmailVerification(email: string, pass: string): Promise<void> {
-  const credential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), pass);
-  await reload(credential.user);
-  if (credential.user.emailVerified) {
-    await signOut(auth);
-    throw new Error('EMAIL_ALREADY_VERIFIED');
-  }
-  await sendEmailVerification(credential.user, { url: window.location.origin, handleCodeInApp: false });
-  await signOut(auth);
-}
-
 export async function requestPasswordReset(email: string): Promise<void> {
   await sendPasswordResetEmail(auth, email.trim().toLowerCase(), { url: window.location.origin, handleCodeInApp: false });
 }

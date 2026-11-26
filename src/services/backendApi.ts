@@ -154,6 +154,9 @@ export const backendApi = {
       requireAuth: false,
     }),
 
+  sendEmailOtp: (email: string) => apiRequest<{ ok: boolean; message: string }>('/api/auth/email-otp/send', { method: 'POST', body: { email }, requireAuth: false }),
+  verifyEmailOtp: (email: string, code: string) => apiRequest<{ ok: boolean; verified: boolean }>('/api/auth/email-otp/verify', { method: 'POST', body: { email, code }, requireAuth: false }),
+
   getMe: () => apiRequest<BackendMeResponse>('/api/me'),
 
   updateProfile: (payload: { displayName?: string; phoneNumber?: string; referralCode?: string }) =>

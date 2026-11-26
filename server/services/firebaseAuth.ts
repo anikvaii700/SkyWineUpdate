@@ -22,6 +22,10 @@ function getFirebaseAdminApp() {
   return initializeApp({ projectId: env.firebaseProjectId });
 }
 
+export function getFirebaseAdminAuth() {
+  return getAuth(getFirebaseAdminApp());
+}
+
 export const defaultTokenVerifier: TokenVerifier = async (idToken: string): Promise<VerifiedFirebaseIdentity> => {
   if (!idToken || idToken.length < 20 || idToken.length > 8192) {
     throw new HttpError(401, 'INVALID_TOKEN', 'Invalid authentication token.');

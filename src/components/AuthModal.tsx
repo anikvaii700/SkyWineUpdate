@@ -28,6 +28,7 @@ import {
 import { calculateWithdrawableBalance, calculateTotalLockedBonuses } from '../services/userManagement';
 import {
   signInWithGoogle,
+  requestPasswordReset,
   logoutUser as firebaseLogout,
   updateUserPhoneNumber,
   getOrCreateUserProfile,
@@ -76,6 +77,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [authMode, setAuthMode] = useState<AuthMode>('signup');
 
   // Form states
+  const [email, setEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpPending, setOtpPending] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -162,6 +166,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setErrorMsg('সঠিক ইমেইল ঠিকানা দিন।');
+      return;
+    }
+
     const { cleanPhone } = normalizePhoneNumber(phoneNumber);
     if (cleanPhone.length !== 11 || !cleanPhone.startsWith('01')) {
       setErrorMsg('অনুগ্রহ করে সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 01712345678)');
@@ -183,8 +192,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     try {
       if (authMode === 'signup') {
-        const res = await registerPhoneAccount(phoneNumber, password, fullName, referralCodeInput);
-        if (!res.success || !res.user || !res.profile) {
+        const res = await registerPhoneAccount(email, phoneNumber, password, fullName, referralCodeInput);
+        if (!res.success) {
           setErrorMsg(res.error || 'অ্যাকাউন্ট তৈরি করা যায়নি');
           if (res.error?.includes('ইতোমধ্যে')) {
             setAuthMode('login');
@@ -192,17 +201,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           return;
         }
 
-        soundManager.playWin();
-        setSuccessMsg(
-          `মোবাইল অ্যাকাউন্ট তৈরি হয়েছে! নতুন ওয়ালেট ব্যালেন্স ৳ ০.০০।` +
-            (res.referralBonusApplied ? ' (রেফারেল কোড সফলভাবে যুক্ত হয়েছে)' : '')
-        );
-        onLoginSuccess(res.user, res.profile);
-        setTimeout(() => {
-          onClose();
-        }, 600);
+        setOtpPending(true);
+        setSuccessMsg('আপনার ইমেইলে ৬ সংখ্যার OTP পাঠানো হয়েছে। কোডটি লিখে ইমেইল ভেরিফাই করুন।');
       } else {
-        const res = await loginPhoneAccount(phoneNumber, password);
+        const res = await loginPhoneAccount(email, phoneNumber, password, referralCodeInput);
         if (!res.success || !res.user || !res.profile) {
           setErrorMsg(res.error || 'লগইন ব্যর্থ হয়েছে।');
           return;
@@ -218,6 +220,60 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } catch (err: unknown) {
       console.warn('Phone auth notice:', err);
       setErrorMsg('প্রক্রিয়া সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!email.trim()) {
+      setErrorMsg('OTP পাঠাতে ইমেইল ঠিকানা দিন।');
+      return;
+    }
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      await backendApi.sendEmailOtp(email.trim().toLowerCase());
+      setOtpPending(true);
+      setSuccessMsg('নতুন ৬ সংখ্যার OTP পাঠানো হয়েছে।');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'OTP পাঠানো যায়নি।');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!/^\d{6}$/.test(otpCode.trim())) {
+      setErrorMsg('৬ সংখ্যার OTP লিখুন।');
+      return;
+    }
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      await backendApi.verifyEmailOtp(email.trim().toLowerCase(), otpCode.trim());
+      setOtpPending(false);
+      setAuthMode('login');
+      setSuccessMsg('ইমেইল সফলভাবে ভেরিফাই হয়েছে। এখন লগইন করুন।');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'OTP যাচাই করা যায়নি।');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!email.trim()) {
+      setErrorMsg('পাসওয়ার্ড রিসেটের জন্য ইমেইল ঠিকানা লিখুন।');
+      return;
+    }
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      await requestPasswordReset(email);
+      setSuccessMsg('পাসওয়ার্ড রিসেট লিংক আপনার ইমেইলে পাঠানো হয়েছে।');
+    } catch {
+      setErrorMsg('রিসেট লিংক পাঠানো যায়নি। ইমেইল ঠিকানা যাচাই করুন।');
     } finally {
       setIsLoading(false);
     }
@@ -589,80 +645,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               )}
 
-              {/* Top Navigation Tabs: Mobile Number vs Gmail */}
-              <div className="grid grid-cols-2 gap-2 p-1 bg-[#0a0e17] border border-[#1f2b3e] rounded-2xl">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveMethod('phone');
-                    setErrorMsg(null);
-                    setSuccessMsg(null);
-                  }}
-                  className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                    activeMethod === 'phone'
-                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Smartphone className="w-4 h-4" />
-                  <span>মোবাইল নাম্বার</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveMethod('google');
-                    setErrorMsg(null);
-                    setSuccessMsg(null);
-                  }}
-                  className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                    activeMethod === 'google'
-                      ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Mail className="w-4 h-4" />
-                  <span>জিমেইল (Google)</span>
-                </button>
+              {/* Email + mobile registration is the only supported account method. */}
+              <div className="rounded-xl border border-emerald-700/40 bg-emerald-950/20 px-3 py-2 text-center text-xs text-emerald-300">
+                ইমেইল ভেরিফিকেশনসহ মোবাইল অ্যাকাউন্ট
               </div>
 
-              {/* Sub-mode switch (Login vs Signup) for Phone */}
-              {activeMethod === 'phone' && (
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs text-slate-300 font-medium">
-                    {authMode === 'signup' ? 'নতুন অ্যাকাউন্ট খুলুন:' : 'বিদ্যমান অ্যাকাউন্টে প্রবেশ করুন:'}
-                  </span>
-                  <div className="flex gap-1 bg-[#151c2a] p-0.5 rounded-lg border border-[#222e43]">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuthMode('signup');
-                        setErrorMsg(null);
-                      }}
-                      className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                        authMode === 'signup'
-                          ? 'bg-emerald-500 text-white shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      সাইনআপ
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuthMode('login');
-                        setErrorMsg(null);
-                      }}
-                      className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                        authMode === 'login'
-                          ? 'bg-emerald-500 text-white shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      লগইন
-                    </button>
-                  </div>
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs text-slate-300 font-medium">
+                  {authMode === 'signup' ? 'নতুন অ্যাকাউন্ট খুলুন:' : 'বিদ্যমান অ্যাকাউন্টে প্রবেশ করুন:'}
+                </span>
+                <div className="flex gap-1 bg-[#151c2a] p-0.5 rounded-lg border border-[#222e43]">
+                  <button type="button" onClick={() => { setAuthMode('signup'); setErrorMsg(null); setSuccessMsg(null); }}
+                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'signup' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                    সাইনআপ
+                  </button>
+                  <button type="button" onClick={() => { setAuthMode('login'); setErrorMsg(null); setSuccessMsg(null); }}
+                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${authMode === 'login' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                    লগইন
+                  </button>
                 </div>
-              )}
+              </div>
 
               {/* Feedback messages */}
               {errorMsg && (
@@ -686,11 +688,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                     <p className="text-xs text-slate-300 leading-snug">
                       {authMode === 'signup'
-                        ? 'আপনার মোবাইল নাম্বার ও ৬ সংখ্যার গোপন পিন দিয়ে সরাসরি ফ্রি অ্যাকাউন্ট খুলুন।'
-                        : 'আপনার রেজিস্টার্ড মোবাইল নাম্বার ও পাসওয়ার্ড দিয়ে সরাসরি লগইন করুন।'}
+                        ? 'ইমেইল ভেরিফিকেশন সম্পন্ন করে মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে অ্যাকাউন্ট খুলুন।'
+                        : 'ভেরিফাই করা ইমেইল, মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।'}
                     </p>
                   </div>
 
+                  {otpPending ? (
+                    <div className="space-y-3 rounded-2xl border border-emerald-700/40 bg-[#0b0e15] p-4">
+                      <div className="text-center text-sm font-bold text-white">ইমেইল OTP যাচাই</div>
+                      <p className="text-center text-xs text-slate-300">{email} ঠিকানায় পাঠানো ৬ সংখ্যার কোডটি লিখুন। কোড ১০ মিনিট কার্যকর থাকবে।</p>
+                      <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="৬ সংখ্যার OTP" className="w-full rounded-xl border border-[#232f44] bg-[#0d121c] px-3 py-3 text-center text-xl tracking-[0.5em] text-white" />
+                      <button type="button" onClick={handleVerifyOtp} disabled={isLoading || otpCode.length !== 6} className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white disabled:opacity-50">{isLoading ? 'যাচাই হচ্ছে...' : 'OTP যাচাই করুন'}</button>
+                      <button type="button" onClick={handleResendVerification} disabled={isLoading} className="w-full py-2 text-xs text-amber-300">আবার OTP পাঠান</button>
+                    </div>
+                  ) : (
                   <form onSubmit={handlePhoneSubmit} className="space-y-3">
                     {authMode === 'signup' && (
                       <div>
@@ -710,6 +721,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </div>
                     )}
 
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        ইমেইল ঠিকানা <span className="text-rose-400">*</span>
+                      </label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                        <input
+                          type="email"
+                          required
+                          autoComplete="email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="আপনার ইমেইল"
+                          className="w-full bg-[#0d121c] border border-[#232f44] rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500 transition-colors"
+                        />
+                      </div>
+                    </div>
                     <div>
                       <label className="block text-[11px] font-bold text-slate-300 mb-1">
                         মোবাইল নাম্বার (১১ ডিজিট)
@@ -753,6 +781,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         </button>
                       </div>
                     </div>
+
+                    {authMode === 'login' && (
+                      <div className="flex flex-wrap gap-3 text-[11px]">
+                        <button type="button" onClick={handlePasswordReset} disabled={isLoading} className="text-sky-400 hover:text-sky-300">
+                          পাসওয়ার্ড ভুলে গেছেন?
+                        </button>
+                        <button type="button" onClick={handleResendVerification} disabled={isLoading} className="text-amber-400 hover:text-amber-300">
+                          OTP আবার পাঠান
+                        </button>
+                      </div>
+                    )}
 
                     {authMode === 'signup' && (
                       <>
@@ -824,24 +863,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         {isLoading
                           ? 'প্রক্রিয়াধীন...'
                           : authMode === 'signup'
-                          ? 'মোবাইল দিয়ে ফ্রি একাউন্ট খুলুন'
-                          : 'মোবাইল নাম্বার দিয়ে লগইন করুন'}
+                          ? 'ইমেইল ভেরিফাই করে অ্যাকাউন্ট খুলুন'
+                          : 'ইমেইল ও মোবাইল দিয়ে লগইন করুন'}
                       </span>
                     </button>
                   </form>
+                  )}
 
-                  {/* Or Google 1-click option */}
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={handleGoogleLogin}
-                      disabled={isLoading}
-                      className="w-full py-2.5 bg-[#172132] hover:bg-[#202d44] border border-[#2b3a55] text-slate-300 hover:text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-colors"
-                    >
-                      <Mail className="w-3.5 h-3.5 text-rose-400" />
-                      <span>অথবা Google জিমেইল দিয়ে ১-ক্লিকে সাইনআপ করুন</span>
-                    </button>
-                  </div>
                 </div>
               )}
 

@@ -8,6 +8,7 @@ import { generalApiLimiter } from './middleware/rateLimit.ts';
 import { createAdminRouter } from './routes/admin.ts';
 import { createPublicRouter } from './routes/public.ts';
 import { createWalletRouter } from './routes/wallet.ts';
+import { createEmailOtpRouter } from './routes/emailOtp.ts';
 
 export interface CreateAppOptions {
   authDeps?: AuthMiddlewareDeps;
@@ -91,6 +92,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const { requireAuth, requireAdmin } = createAuthMiddleware(options.authDeps);
 
   app.use('/api', createPublicRouter());
+  app.use('/api', createEmailOtpRouter());
   app.use('/api', createWalletRouter(requireAuth));
   app.use('/api/admin', requireAuth, requireAdmin, createAdminRouter());
 

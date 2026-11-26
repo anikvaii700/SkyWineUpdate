@@ -20,6 +20,18 @@ CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email)) WHERE e
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone_number) WHERE phone_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_users_role ON users (role);
 
+CREATE TABLE IF NOT EXISTS email_verification_otps (
+  email TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  consumed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_otp_expiry ON email_verification_otps (expires_at);
+
 CREATE TABLE IF NOT EXISTS wallets (
   user_id TEXT PRIMARY KEY REFERENCES users(firebase_uid) ON DELETE CASCADE,
   balance NUMERIC(14, 2) NOT NULL DEFAULT 0.00 CHECK (balance >= 0),

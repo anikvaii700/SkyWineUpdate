@@ -254,7 +254,7 @@ export async function registerPhoneAccount(
   rawPhone: string,
   pass: string,
   fullName?: string,
-  referralCodeInput?: string
+  _referralCodeInput?: string
 ): Promise<{ success: boolean; error?: string }> {
   const { cleanPhone } = normalizePhoneNumber(rawPhone);
   if (!/^01[0-9]{9}$/.test(cleanPhone)) return { success: false, error: 'সঠিক ১১ ডিজিটের বাংলাদেশি মোবাইল নম্বর দিন।' };

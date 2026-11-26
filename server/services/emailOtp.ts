@@ -112,6 +112,7 @@ export async function verifyEmailVerificationOtp(rawEmail: string, rawCode: stri
       await client.query('UPDATE email_verification_otps SET attempts = attempts + 1 WHERE email = $1', [email]);
       return { error: 'OTP_INVALID' as const };
     }
+    await client.query('UPDATE email_verification_otps SET consumed_at = NOW() WHERE email = $1', [email]);
     return { error: null as null };
   });
 
@@ -132,8 +133,5 @@ export async function verifyEmailVerificationOtp(rawEmail: string, rawCode: stri
   if (!user) throw new HttpError(404, 'ACCOUNT_NOT_FOUND', 'Account not found. Please register again.');
   if (!user.emailVerified) await auth.updateUser(user.uid, { emailVerified: true });
 
-  await query(
-    'UPDATE email_verification_otps SET consumed_at = NOW() WHERE email = $1 AND consumed_at IS NULL',
-    [email]
-  );
+
 }

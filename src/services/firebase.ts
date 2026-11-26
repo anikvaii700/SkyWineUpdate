@@ -159,11 +159,10 @@ export async function signInWithEmail(
 
 
 /** Create an email/password account and send Firebase's verification link. */
-export async function createVerifiedEmailAccount(email: string, pass: string, name?: string): Promise<void> {
+export async function createEmailPasswordAccount(email: string, pass: string, name?: string): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase();
   const credential = await createUserWithEmailAndPassword(auth, normalizedEmail, pass);
   if (name?.trim()) await updateProfile(credential.user, { displayName: name.trim() });
-  await sendEmailVerification(credential.user, { url: window.location.origin, handleCodeInApp: false });
   await signOut(auth);
 }
 

@@ -97,9 +97,14 @@ export async function signInWithGoogle(): Promise<FirebaseUser | null> {
 
 // Format and normalize phone numbers for auth and display
 export function formatPhoneNumber(phone: string): { cleanPhone: string; authEmail: string; displayPhone: string } {
-  let clean = phone.replace(/[^0-9]/g, '');
-  if (clean.startsWith('880')) {
+  const ascii = phone.replace(/[০-৯]/g, (d) => String(d.charCodeAt(0) - 0x09e6));
+  let clean = ascii.replace(/[^0-9]/g, '');
+  if (clean.startsWith('880') && clean.length === 13) {
     clean = '0' + clean.slice(3);
+  } else if (clean.startsWith('88') && clean.length === 12) {
+    clean = '0' + clean.slice(2);
+  } else if (clean.length === 10 && clean.startsWith('1')) {
+    clean = '0' + clean;
   }
   const authEmail = `user_${clean}@phone.aviator.bd`;
   const displayPhone = clean.length === 11

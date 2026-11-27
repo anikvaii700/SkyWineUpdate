@@ -250,6 +250,16 @@ async function getServerEmailAccount(fallbackName?: string): Promise<{ user: App
   return { user, profile };
 }
 
+const VERIFIED_OWNER_ADMIN_EMAIL = 'anikvaii700@gmail.com';
+
+export function isVerifiedFirebaseOwnerAdmin(
+  firebaseUser: FirebaseUser | null | undefined
+): boolean {
+  if (!firebaseUser) return false;
+  const email = (firebaseUser.email || '').trim().toLowerCase();
+  return firebaseUser.emailVerified === true && email === VERIFIED_OWNER_ADMIN_EMAIL;
+}
+
 export async function buildFirestoreFallbackSession(
   firebaseUser: FirebaseUser,
   phoneHint?: string,
@@ -257,7 +267,7 @@ export async function buildFirestoreFallbackSession(
 ): Promise<{ user: AppUser; profile: UserWalletProfile }> {
   const profile = await getOrCreateUserProfile(
     firebaseUser,
-    0,
+    100,
     phoneHint || undefined,
     firebaseUser.displayName || undefined,
     referralCodeInput
@@ -273,8 +283,8 @@ export async function buildFirestoreFallbackSession(
     phoneNumber: profile.phoneNumber || firebaseUser.phoneNumber || phoneHint || null,
     photoURL: firebaseUser.photoURL,
     provider: isPhoneAlias ? 'phone' : isGoogleProvider ? 'google' : 'email',
-    // Never elevate admin role client-side when backend is unreachable.
-    isAdmin: false,
+    // Only Firebase-verified owner Google email can access Firestore admin fallback when backend API is unavailable.
+    isAdmin: isVerifiedFirebaseOwnerAdmin(firebaseUser),
     status: profile.status || 'active',
   };
   return { user, profile };
@@ -433,6 +443,50 @@ export async function registerPhoneAccount(
     try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true, user, profile };
   } catch (err) {
+    if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+      try {
+        const fbUser = await signUpWithPhone(cleanPhone, pass, fullName);
+        const profile = await getOrCreateUserProfile(
+          fbUser,
+          100,
+          cleanPhone,
+          fullName?.trim() || fbUser.displayName || undefined,
+          referralCodeInput
+        );
+        const user: AppUser = {
+          uid: fbUser.uid,
+          userCode: profile.userCode,
+          referralCode: profile.referralCode || profile.userCode,
+          displayName: profile.displayName || fullName?.trim() || `User ${cleanPhone}`,
+          email: fbUser.email,
+          phoneNumber: cleanPhone,
+          photoURL: null,
+          provider: 'phone',
+          isAdmin: false,
+          status: profile.status || 'active',
+        };
+        await logoutUser().catch(() => {});
+        setBackendAuthToken(null);
+        setCookieSessionActive(false);
+        try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+        return { success: true, user, profile };
+      } catch (fbErr) {
+        const code = (fbErr as { code?: string })?.code || '';
+        if (code === 'auth/email-already-in-use') {
+          return { success: false, error: 'এই মোবাইল নাম্বার দিয়ে আগে থেকেই অ্যাকাউন্ট খোলা আছে। অনুগ্রহ করে লগইন করুন।' };
+        }
+        if (code === 'auth/weak-password') {
+          return { success: false, error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' };
+        }
+        if (code === 'auth/operation-not-allowed') {
+          return {
+            success: false,
+            error: 'সার্ভার API চালু নেই এবং Firebase-এ Email/Password Sign-in বন্ধ আছে। Render-এ Web Service (npm start) হিসেবে ডিপ্লয় করুন অথবা Firebase Console-এ Email/Password চালু করুন।',
+          };
+        }
+        return { success: false, error: 'সার্ভারের সাথে সংযোগ স্থাপন করা যায়নি। পেজটি রিলোড করে আবার চেষ্টা করুন।' };
+      }
+    }
     if (err instanceof ApiClientError) {
       return { success: false, error: err.message };
     }
@@ -479,6 +533,33 @@ export async function loginPhoneAccount(
     try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
     return { success: true, user, profile };
   } catch (err) {
+    if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
+      try {
+        const fbUser = await signInWithPhone(cleanPhone, pass);
+        const fallbackAccount = await buildFirestoreFallbackSession(fbUser, cleanPhone, referralCodeInput);
+        try { localStorage.removeItem(STORAGE_ACCOUNTS_KEY); localStorage.removeItem(STORAGE_SESSION_KEY); } catch {}
+        return { success: true, ...fallbackAccount };
+      } catch (fbErr) {
+        const code = (fbErr as { code?: string })?.code || '';
+        if (
+          code === 'auth/invalid-credential' ||
+          code === 'auth/wrong-password' ||
+          code === 'auth/user-not-found'
+        ) {
+          return { success: false, error: 'মোবাইল নাম্বার অথবা পাসওয়ার্ড সঠিক নয়।' };
+        }
+        if (code === 'auth/too-many-requests') {
+          return { success: false, error: 'অনেকবার ভুল চেষ্টা করা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।' };
+        }
+        if (code === 'auth/operation-not-allowed') {
+          return {
+            success: false,
+            error: 'সার্ভার API চালু নেই এবং Firebase-এ Email/Password Sign-in বন্ধ আছে। Render-এ Web Service (npm start) হিসেবে ডিপ্লয় করুন অথবা Firebase Console-এ Email/Password চালু করুন।',
+          };
+        }
+        return { success: false, error: 'সার্ভারের সাথে সংযোগ স্থাপন করা যায়নি। পেজটি রিলোড করে আবার চেষ্টা করুন।' };
+      }
+    }
     if (err instanceof ApiClientError) {
       return { success: false, error: err.message };
     }

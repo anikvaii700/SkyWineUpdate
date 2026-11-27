@@ -51,6 +51,7 @@ import {
   AppUser,
   buildFirestoreFallbackSession,
   checkAccountSuspensionStatus,
+  isVerifiedFirebaseOwnerAdmin,
   logoutPhoneSession,
 } from './services/phoneAuth';
 import { recordUserBet } from './services/userManagement';
@@ -1906,7 +1907,28 @@ export default function App() {
         soundManager.playWin();
         setIsAdminOpen(true);
       }
-    } catch {
+    } catch (err) {
+      if (
+        err instanceof ApiClientError &&
+        err.code === 'NETWORK_ERROR' &&
+        isVerifiedFirebaseOwnerAdmin(auth.currentUser)
+      ) {
+        const updatedUser: AppUser = {
+          ...(currentUser || {
+            uid: auth.currentUser.uid,
+            displayName: auth.currentUser.displayName || 'Admin',
+            email: auth.currentUser.email,
+            phoneNumber: auth.currentUser.phoneNumber || null,
+            photoURL: auth.currentUser.photoURL,
+            provider: 'google' as const,
+          }),
+          isAdmin: true,
+        };
+        currentUserRef.current = updatedUser;
+        setCurrentUser(updatedUser);
+        soundManager.playWin();
+        setIsAdminOpen(true);
+      }
       // Remain completely silent if server rejects or user is not an admin.
     }
   }, [currentUser]);

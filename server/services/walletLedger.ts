@@ -84,10 +84,18 @@ export function parseNumeric(value: string | number | null | undefined): number 
   return 0;
 }
 
+export const WELCOME_BONUS_AMOUNT = 100;
+export const WELCOME_BONUS_FIXED = '100.00';
+
 export function normalizePhone(raw: string): string {
-  let clean = raw.replace(/[^0-9]/g, '');
+  const ascii = raw.replace(/[০-৯]/g, (d) => String(d.charCodeAt(0) - 0x09e6));
+  let clean = ascii.replace(/[^0-9]/g, '');
   if (clean.startsWith('880') && clean.length === 13) {
     clean = '0' + clean.slice(3);
+  } else if (clean.startsWith('88') && clean.length === 12) {
+    clean = '0' + clean.slice(2);
+  } else if (clean.length === 10 && clean.startsWith('1')) {
+    clean = '0' + clean;
   }
   return clean;
 }
@@ -291,7 +299,16 @@ export async function ensureUserAndWallet(identity: VerifiedFirebaseIdentity): P
            RETURNING *`,
           [identity.uid, code, identity.email, displayName, identity.phoneNumber ? normalizePhone(identity.phoneNumber) : null, initialRole, code]
         );
-        await client.query(`INSERT INTO wallets (user_id) VALUES ($1)`, [identity.uid]);
+        await client.query(
+          `INSERT INTO wallets (user_id, balance, invite_bonus_locked) VALUES ($1, $2, $3)`,
+          [identity.uid, WELCOME_BONUS_FIXED, WELCOME_BONUS_FIXED]
+        );
+        await client.query(
+          `INSERT INTO wallet_transactions
+             (user_id, type, direction, amount, balance_before, balance_after, reference_type, reference_id, idempotency_key, note, created_by)
+           VALUES ($1, 'deposit_bonus', 'credit', $2, '0.00', $2, 'welcome_bonus', $1, $3, $4, 'system')`,
+          [identity.uid, WELCOME_BONUS_FIXED, `welcome_bonus:${identity.uid}`, 'ওয়েলকাম বোনাস (৳১০০)']
+        );
         return mapUserRow(inserted.rows[0]);
       } catch (err) {
         const pgErr = err as { code?: string };

@@ -83,8 +83,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
       cors({
         origin: normalizedOrigin,
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization'],
-        credentials: false,
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+        credentials: true,
         maxAge: 600,
       })(req, res, next);
     }

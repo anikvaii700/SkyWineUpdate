@@ -43,7 +43,7 @@ import {
   SystemPaymentSettings,
 } from './services/manualPayment';
 import { soundManager } from './services/audio';
-import { ApiClientError, backendApi, hasBackendAuthToken, hasBackendSession, mapBackendMeToProfile } from './services/backendApi';
+import { ApiClientError, backendApi, hasBackendAuthToken, hasBackendSession, mapBackendMeToProfile, setCookieSessionActive } from './services/backendApi';
 import { Language, translations } from './utils/i18n';
 import { auth, UserWalletProfile } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -512,10 +512,40 @@ export default function App() {
           setAuthNoticeMessage('সার্ভারের সাথে সংযোগ হয়নি। কিছুক্ষণ পর আবার লগইন করুন।');
         }
       } else if (!hasBackendAuthToken()) {
-        setCurrentUser(null);
-        setUserProfile(null);
-        setBalance(0);
-        serverWalletBalanceRef.current = null;
+        // Check if an HttpOnly server session cookie exists (e.g. after page refresh for mobile login).
+        try {
+          const me = await backendApi.restoreSession();
+          setCookieSessionActive(true);
+          const profile = mapBackendMeToProfile(me, null);
+          const appUser: AppUser = {
+            uid: me.user.uid,
+            userCode: me.user.userCode,
+            referralCode: me.user.referralCode,
+            displayName: me.user.displayName || 'Player',
+            email: me.user.email || null,
+            phoneNumber: me.user.phoneNumber || null,
+            photoURL: null,
+            provider: me.user.uid.startsWith('phone_') ? 'phone' : 'email',
+            isAdmin: me.user.isAdmin === true,
+            status: me.user.status as AppUser['status'],
+          };
+          const restoredBalance = Math.max(
+            0,
+            Math.round((me.wallet.balance + getLocalWalletAdjustment(appUser.uid)) * 100) / 100
+          );
+          currentUserRef.current = appUser;
+          serverWalletBalanceRef.current = me.wallet.balance;
+          balanceRef.current = restoredBalance;
+          setCurrentUser(appUser);
+          setUserProfile(profile);
+          setBalance(restoredBalance);
+        } catch {
+          setCookieSessionActive(false);
+          setCurrentUser(null);
+          setUserProfile(null);
+          setBalance(0);
+          serverWalletBalanceRef.current = null;
+        }
       }
     });
 

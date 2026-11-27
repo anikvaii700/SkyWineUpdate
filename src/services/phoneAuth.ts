@@ -1,5 +1,5 @@
 import { UserWalletProfile, db, getOrCreateUserProfile, signUpWithPhone, signInWithPhone, logoutUser } from './firebase';
-import { ApiClientError, backendApi, mapBackendMeToProfile, setBackendAuthToken } from './backendApi';
+import { ApiClientError, backendApi, mapBackendMeToProfile, setBackendAuthToken, setCookieSessionActive } from './backendApi';
 import type { User as FirebaseUser } from 'firebase/auth';
 import { doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
 import { recordAccountRegistrationOnDevice } from './deviceSecurity';
@@ -112,13 +112,16 @@ const STORAGE_ACCOUNTS_KEY = 'aviator_phone_accounts_v1';
 const STORAGE_SESSION_KEY = 'aviator_active_phone_session_v1';
 const STORAGE_REFERRALS_KEY = 'aviator_referrals_records_v1';
 
-// Format and normalize phone numbers for auth and display
+// Format and normalize phone numbers for auth and display (supports Bengali and English digits)
 export function normalizePhoneNumber(phone: string): { cleanPhone: string; displayPhone: string } {
-  let clean = phone.replace(/[^0-9]/g, '');
-  if (clean.startsWith('880')) {
+  const ascii = phone.replace(/[০-৯]/g, (d) => String(d.charCodeAt(0) - 0x09e6));
+  let clean = ascii.replace(/[^0-9]/g, '');
+  if (clean.startsWith('880') && clean.length === 13) {
     clean = '0' + clean.slice(3);
-  } else if (clean.startsWith('88') && clean.length > 11) {
-    clean = clean.slice(2);
+  } else if (clean.startsWith('88') && clean.length === 12) {
+    clean = '0' + clean.slice(2);
+  } else if (clean.length === 10 && clean.startsWith('1')) {
+    clean = '0' + clean;
   }
   const displayPhone = clean.length === 11
     ? `${clean.slice(0, 5)}-${clean.slice(5)}`
@@ -457,8 +460,9 @@ export async function loginPhoneAccount(
       password: pass,
       ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
     });
-    await logoutUser().catch(() => {});
     setBackendAuthToken(res.token);
+    setCookieSessionActive(true);
+    await logoutUser().catch(() => {});
     const profile = mapBackendMeToProfile(res, null);
     const user: AppUser = {
       uid: res.user.uid,
@@ -491,10 +495,12 @@ export function getActivePhoneSession(): { user: AppUser; profile: UserWalletPro
 // Logout phone user
 export function logoutPhoneSession(): void {
   setBackendAuthToken(null);
+  setCookieSessionActive(false);
   try {
     localStorage.removeItem(STORAGE_SESSION_KEY);
     localStorage.removeItem(STORAGE_ACCOUNTS_KEY);
   } catch {}
+  void backendApi.logout().catch(() => {});
   void logoutUser().catch(() => {});
 }
 

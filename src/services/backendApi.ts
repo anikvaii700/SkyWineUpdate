@@ -16,23 +16,33 @@ export class ApiClientError extends Error {
 }
 
 // Holds custom phone-session Bearer token strictly in JS memory (never in localStorage/sessionStorage).
+// Persistence across page reloads is handled by the server's HttpOnly cookie.
 let memoryAuthToken: string | null = null;
+let hasActiveCookieSession = false;
 
 export function setBackendAuthToken(token: string | null): void {
   memoryAuthToken = token ? token.trim() : null;
+  if (!memoryAuthToken) {
+    hasActiveCookieSession = false;
+  }
+}
+
+export function setCookieSessionActive(active: boolean): void {
+  hasActiveCookieSession = active;
 }
 
 export function hasBackendAuthToken(): boolean {
-  return Boolean(memoryAuthToken);
+  return Boolean(memoryAuthToken || hasActiveCookieSession);
 }
 
 export function hasBackendSession(): boolean {
-  return Boolean(auth.currentUser || memoryAuthToken);
+  return Boolean(auth.currentUser || memoryAuthToken || hasActiveCookieSession);
 }
 
 async function getAuthHeaders(requireAuth = true): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-Requested-With': 'SkyWinBD',
   };
 
   if (requireAuth) {
@@ -42,7 +52,7 @@ async function getAuthHeaders(requireAuth = true): Promise<Record<string, string
       headers.Authorization = `Bearer ${token}`;
     } else if (memoryAuthToken) {
       headers.Authorization = `Bearer ${memoryAuthToken}`;
-    } else {
+    } else if (!hasActiveCookieSession) {
       throw new ApiClientError(401, 'NOT_SIGNED_IN', 'Please sign in first.');
     }
   }
@@ -108,7 +118,7 @@ async function apiRequest<T>(
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     cache: 'no-store',
-    credentials: API_BASE_URL ? 'omit' : 'same-origin',
+    credentials: 'include',
   });
 
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -155,6 +165,9 @@ export function mapBackendMeToProfile(
   firebaseUser?: FirebaseUser | null
 ): UserWalletProfile {
   const now = new Date().toISOString();
+  const lockedTotal = Math.max(0, Number(data.wallet.inviteBonusLocked || 0));
+  const initialBonus = lockedTotal > 0 ? Math.min(100, lockedTotal) : 0;
+  const inviteOnlyLocked = Math.max(0, Math.round((lockedTotal - initialBonus) * 100) / 100);
   return {
     id: data.user.uid,
     userCode: data.user.userCode,
@@ -163,15 +176,15 @@ export function mapBackendMeToProfile(
     photoURL: firebaseUser?.photoURL || '',
     phoneNumber: data.user.phoneNumber || firebaseUser?.phoneNumber || '',
     balance: data.wallet.balance,
-    initialBonus: 0,
-    lockedPrincipal: data.wallet.inviteBonusLocked,
+    initialBonus,
+    lockedPrincipal: lockedTotal,
     totalDeposited: data.wallet.totalDeposited,
     firstDepositBonusEarned: 0,
     hasDeposited: data.wallet.totalDeposited > 0,
     referralCode: data.user.referralCode,
     referralCount: 0,
     referralBonusEarned: 0,
-    inviteBonusBalance: data.wallet.inviteBonusLocked,
+    inviteBonusBalance: inviteOnlyLocked,
     firstDepositReferralRewarded: data.user.firstDepositRewarded,
     status: data.user.status as UserWalletProfile['status'],
     createdAt: data.user.createdAt || now,
@@ -228,6 +241,14 @@ export const backendApi = {
       body: payload,
       requireAuth: false,
     }),
+
+  logout: () =>
+    apiRequest<{ ok: boolean }>('/api/auth/logout', {
+      method: 'POST',
+      requireAuth: false,
+    }),
+
+  restoreSession: () => apiRequest<BackendMeResponse>('/api/me', { requireAuth: false }),
 
   sendEmailOtp: (email: string) => apiRequest<{ ok: boolean; message: string }>('/api/auth/email-otp/send', { method: 'POST', body: { email }, requireAuth: false }),
   verifyEmailOtp: (email: string, code: string) => apiRequest<{ ok: boolean; verified: boolean }>('/api/auth/email-otp/verify', { method: 'POST', body: { email, code }, requireAuth: false }),

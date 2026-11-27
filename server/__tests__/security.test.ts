@@ -367,8 +367,8 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
     assert.equal(signupBody.user.firstDepositRewarded, false);
 
     assert.equal(signupBody.wallet.userId, 'phone_01711223344');
-    assert.equal(signupBody.wallet.balance, 0);
-    assert.equal(signupBody.wallet.inviteBonusLocked, 0);
+    assert.equal(signupBody.wallet.balance, 100);
+    assert.equal(signupBody.wallet.inviteBonusLocked, 100);
     assert.equal(signupBody.wallet.withdrawableBalance, 0);
     assert.equal(signupBody.wallet.totalDeposited, 0);
     assert.equal(signupBody.wallet.totalWithdrawn, 0);
@@ -409,7 +409,7 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
     });
     assert.equal(badLoginRes.status, 401);
 
-    // Valid login returns fresh signed Bearer token
+    // Valid login returns fresh signed Bearer token AND HttpOnly session cookie for refresh persistence
     const loginRes = await fetch(`${baseUrl}/api/auth/phone-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -419,12 +419,25 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
       }),
     });
     assert.equal(loginRes.status, 200);
-    const loginBody = (await loginRes.json()) as { ok: boolean; token: string; user: { uid: string; role: string } };
+    const setCookieHeader = loginRes.headers.get('set-cookie') || '';
+    assert.match(setCookieHeader, /^skywin_session=/);
+    assert.match(setCookieHeader, /HttpOnly/i);
+    const sessionCookiePair = setCookieHeader.split(';')[0];
+
+    const loginBody = (await loginRes.json()) as {
+      ok: boolean;
+      token: string;
+      user: { uid: string; role: string };
+      wallet: { balance: number; inviteBonusLocked: number; withdrawableBalance: number };
+    };
     assert.equal(loginBody.ok, true);
     assert.equal(loginBody.user.uid, 'phone_01711223344');
     assert.equal(loginBody.user.role, 'user');
+    assert.equal(loginBody.wallet.balance, 100);
+    assert.equal(loginBody.wallet.inviteBonusLocked, 100);
+    assert.equal(loginBody.wallet.withdrawableBalance, 0);
 
-    // Authorized /api/me succeeds with issued token
+    // Authorized /api/me succeeds with issued Bearer token
     const meRes = await fetch(`${baseUrl}/api/me`, {
       headers: { Authorization: `Bearer ${loginBody.token}` },
     });
@@ -432,6 +445,35 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
     const meBody = (await meRes.json()) as { user: { uid: string; phoneNumber: string } };
     assert.equal(meBody.user.uid, 'phone_01711223344');
     assert.equal(meBody.user.phoneNumber, '01711223344');
+
+    // Authorized /api/me also succeeds using ONLY the HttpOnly cookie (survives page refresh)
+    const cookieMeRes = await fetch(`${baseUrl}/api/me`, {
+      headers: { Cookie: sessionCookiePair },
+    });
+    assert.equal(cookieMeRes.status, 200);
+    const cookieMeBody = (await cookieMeRes.json()) as { user: { uid: string }; wallet: { balance: number } };
+    assert.equal(cookieMeBody.user.uid, 'phone_01711223344');
+    assert.equal(cookieMeBody.wallet.balance, 100);
+
+    // Cookie-authenticated mutation without CSRF header or trusted Origin is rejected with 403
+    const csrfBlockedRes = await fetch(`${baseUrl}/api/me/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: sessionCookiePair },
+      body: JSON.stringify({ displayName: 'Blocked Update' }),
+    });
+    assert.equal(csrfBlockedRes.status, 403);
+
+    // Cookie-authenticated mutation with X-Requested-With header succeeds
+    const csrfAllowedRes = await fetch(`${baseUrl}/api/me/profile`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: sessionCookiePair,
+        'X-Requested-With': 'SkyWinBD',
+      },
+      body: JSON.stringify({ displayName: 'Rafiq Updated' }),
+    });
+    assert.equal(csrfAllowedRes.status, 200);
 
     // Tampered token is rejected with 401
     const tamperedRes = await fetch(`${baseUrl}/api/me`, {
@@ -455,7 +497,7 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
     const massAssignBody = (await massAssignRes.json()) as { code: string };
     assert.equal(massAssignBody.code, 'VALIDATION_ERROR');
 
-    // Signup with unknown referralCode succeeds cleanly with role='user' and balance=0
+    // Signup with unknown referralCode succeeds cleanly with role='user' and ৳100 locked welcome bonus
     const refRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -466,10 +508,16 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
       }),
     });
     assert.equal(refRes.status, 201);
-    const refBody = (await refRes.json()) as { ok: boolean; user: { role: string }; wallet: { balance: number } };
+    const refBody = (await refRes.json()) as {
+      ok: boolean;
+      user: { role: string };
+      wallet: { balance: number; inviteBonusLocked: number; withdrawableBalance: number };
+    };
     assert.equal(refBody.ok, true);
     assert.equal(refBody.user.role, 'user');
-    assert.equal(refBody.wallet.balance, 0);
+    assert.equal(refBody.wallet.balance, 100);
+    assert.equal(refBody.wallet.inviteBonusLocked, 100);
+    assert.equal(refBody.wallet.withdrawableBalance, 0);
   });
 
   it('never promotes unverified phone accounts to admin even if phone is in ADMIN_PHONES', async () => {

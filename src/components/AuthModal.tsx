@@ -183,8 +183,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const cleanDigits = phoneNumber.replace(/[^0-9]/g, '');
-    const normalized = cleanDigits.startsWith('880') ? '0' + cleanDigits.slice(3) : cleanDigits;
+    const asciiPhone = phoneNumber.replace(/[০-৯]/g, (d) => String(d.charCodeAt(0) - 0x09e6));
+    const cleanDigits = asciiPhone.replace(/[^0-9]/g, '');
+    let normalized = cleanDigits;
+    if (normalized.startsWith('880') && normalized.length === 13) {
+      normalized = '0' + normalized.slice(3);
+    } else if (normalized.startsWith('88') && normalized.length === 12) {
+      normalized = '0' + normalized.slice(2);
+    } else if (normalized.length === 10 && normalized.startsWith('1')) {
+      normalized = '0' + normalized;
+    }
     if (!/^01[3-9][0-9]{8}$/.test(normalized)) {
       setErrorMsg('সঠিক ১১ ডিজিটের মোবাইল নাম্বার দিন (যেমন: 017XXXXXXXX)।');
       return;
@@ -731,7 +739,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <div className="flex items-center gap-2 text-[11px] text-slate-400 bg-[#0c1017] p-2.5 rounded-xl border border-[#192231]">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span>
-                  আপনার অ্যাকাউন্ট ক্লাউড ওয়ালেটে সংরক্ষিত। নতুন অ্যাকাউন্টের প্রারম্ভিক ব্যালেন্স ৳ ০.০০।
+                  আপনার অ্যাকাউন্ট ক্লাউড ওয়ালেটে সংরক্ষিত। নতুন অ্যাকাউন্ট খুললেই পাচ্ছেন ৳ ১০০.০০ ওয়েলকাম বোনাস!
                 </span>
               </div>
             </div>

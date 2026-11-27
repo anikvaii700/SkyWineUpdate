@@ -1,4 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
+import { env } from '../config/env.ts';
+import { PHONE_SESSION_COOKIE_NAME } from '../routes/phoneAuth.ts';
 import {
   defaultTokenVerifier,
   type TokenVerifier,
@@ -17,16 +19,67 @@ export interface AuthMiddlewareDeps {
   resolveUser?: (identity: VerifiedFirebaseIdentity) => Promise<DbUser>;
 }
 
-function extractBearerToken(req: Request): string {
+function readCookieValue(cookieHeader: string | undefined, name: string): string | null {
+  if (!cookieHeader) return null;
+  const parts = cookieHeader.split(';');
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    if (key === name) {
+      const rawVal = part.slice(idx + 1).trim();
+      try {
+        return decodeURIComponent(rawVal);
+      } catch {
+        return rawVal;
+      }
+    }
+  }
+  return null;
+}
+
+function isTrustedCookieMutation(req: Request): boolean {
+  const xrw = req.headers['x-requested-with'];
+  if (typeof xrw === 'string' && xrw.trim().length > 0) {
+    return true;
+  }
+
+  const origin = req.headers.origin?.replace(/\/+$/, '');
+  if (!origin) return false;
+
+  const forwardedHostRaw = req.headers['x-forwarded-host'];
+  const forwardedHost = Array.isArray(forwardedHostRaw)
+    ? forwardedHostRaw[0]?.split(',')[0]?.trim()
+    : forwardedHostRaw?.split(',')[0]?.trim();
+  const allowedHosts = [req.headers.host, forwardedHost].filter((h): h is string => Boolean(h));
+
+  if (allowedHosts.some((h) => origin === `https://${h}` || origin === `http://${h}`)) {
+    return true;
+  }
+
+  return env.allowedOrigins.some((allowed) => allowed.replace(/\/+$/, '') === origin);
+}
+
+function extractAuthToken(req: Request): { token: string; source: 'bearer' | 'cookie' } {
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    throw new HttpError(401, 'MISSING_TOKEN', 'Authorization Bearer token is required.');
+  if (header && header.startsWith('Bearer ')) {
+    const token = header.slice('Bearer '.length).trim();
+    if (!token) {
+      throw new HttpError(401, 'MISSING_TOKEN', 'Authorization Bearer token is empty.');
+    }
+    return { token, source: 'bearer' };
   }
-  const token = header.slice('Bearer '.length).trim();
-  if (!token) {
-    throw new HttpError(401, 'MISSING_TOKEN', 'Authorization Bearer token is empty.');
+
+  const cookieToken = readCookieValue(req.headers.cookie, PHONE_SESSION_COOKIE_NAME);
+  if (cookieToken && cookieToken.startsWith('skywin_phone_v1.')) {
+    const method = req.method.toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && !isTrustedCookieMutation(req)) {
+      throw new HttpError(403, 'CSRF_FORBIDDEN', 'Cross-site request blocked.');
+    }
+    return { token: cookieToken, source: 'cookie' };
   }
-  return token;
+
+  throw new HttpError(401, 'MISSING_TOKEN', 'Authorization Bearer token is required.');
 }
 
 export function createAuthMiddleware(deps: AuthMiddlewareDeps = {}) {
@@ -39,7 +92,7 @@ export function createAuthMiddleware(deps: AuthMiddlewareDeps = {}) {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const token = extractBearerToken(req);
+      const { token } = extractAuthToken(req);
       const identity = await verifyToken(token);
       const user = await resolveUser(identity);
 

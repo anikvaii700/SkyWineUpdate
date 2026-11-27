@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 interface UserRow {
@@ -214,19 +216,138 @@ function cloneStore(src: StoreState): StoreState {
   };
 }
 
-let activeStore: StoreState = {
-  users: new Map(),
-  wallets: new Map(),
-  walletTransactions: [],
-  depositRequests: new Map(),
-  withdrawalRequests: new Map(),
-  referrals: new Map(),
-  paymentSettings: createDefaultPaymentSettings(),
-  auditLogs: [],
-  auditLogSeq: 1,
-  emailOtps: new Map(),
-  phoneAccounts: new Map(),
-};
+const PERSIST_DISABLED =
+  process.env.NODE_ENV === 'test' ||
+  process.argv.some((arg) => arg.includes('--test') || arg.includes('security.test'));
+const FALLBACK_STORE_PATH = path.resolve(process.cwd(), '.data', 'skywin-fallback-store.json');
+
+function reviveDates<T extends Record<string, unknown>>(obj: T, dateFields: string[]): T {
+  const copy: Record<string, unknown> = { ...obj };
+  for (const field of dateFields) {
+    if (copy[field] && typeof copy[field] === 'string') {
+      copy[field] = new Date(copy[field] as string);
+    }
+  }
+  return copy as T;
+}
+
+function createEmptyStore(): StoreState {
+  return {
+    users: new Map(),
+    wallets: new Map(),
+    walletTransactions: [],
+    depositRequests: new Map(),
+    withdrawalRequests: new Map(),
+    referrals: new Map(),
+    paymentSettings: createDefaultPaymentSettings(),
+    auditLogs: [],
+    auditLogSeq: 1,
+    emailOtps: new Map(),
+    phoneAccounts: new Map(),
+  };
+}
+
+function loadPersistedStore(): StoreState {
+  if (PERSIST_DISABLED) return createEmptyStore();
+  try {
+    if (!fs.existsSync(FALLBACK_STORE_PATH)) return createEmptyStore();
+    const raw = fs.readFileSync(FALLBACK_STORE_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const store = createEmptyStore();
+
+    if (Array.isArray(parsed.users)) {
+      for (const [k, v] of parsed.users as Array<[string, Record<string, unknown>]>) {
+        store.users.set(k, reviveDates(v, ['created_at', 'updated_at']) as unknown as UserRow);
+      }
+    }
+    if (Array.isArray(parsed.wallets)) {
+      for (const [k, v] of parsed.wallets as Array<[string, Record<string, unknown>]>) {
+        store.wallets.set(k, reviveDates(v, ['updated_at']) as unknown as WalletRow);
+      }
+    }
+    if (Array.isArray(parsed.walletTransactions)) {
+      store.walletTransactions = (parsed.walletTransactions as Array<Record<string, unknown>>).map(
+        (t) => reviveDates(t, ['created_at']) as unknown as WalletTxRow
+      );
+    }
+    if (Array.isArray(parsed.depositRequests)) {
+      for (const [k, v] of parsed.depositRequests as Array<[string, Record<string, unknown>]>) {
+        store.depositRequests.set(
+          k,
+          reviveDates(v, ['reviewed_at', 'created_at', 'updated_at']) as unknown as DepositRow
+        );
+      }
+    }
+    if (Array.isArray(parsed.withdrawalRequests)) {
+      for (const [k, v] of parsed.withdrawalRequests as Array<[string, Record<string, unknown>]>) {
+        store.withdrawalRequests.set(
+          k,
+          reviveDates(v, ['reviewed_at', 'created_at', 'updated_at']) as unknown as WithdrawalRow
+        );
+      }
+    }
+    if (Array.isArray(parsed.referrals)) {
+      for (const [k, v] of parsed.referrals as Array<[string, Record<string, unknown>]>) {
+        store.referrals.set(
+          k,
+          reviveDates(v, ['created_at', 'rewarded_at']) as unknown as ReferralRow
+        );
+      }
+    }
+    if (parsed.paymentSettings && typeof parsed.paymentSettings === 'object') {
+      store.paymentSettings = reviveDates(
+        parsed.paymentSettings as Record<string, unknown>,
+        ['updated_at']
+      ) as unknown as PaymentSettingsRow;
+    }
+    if (Array.isArray(parsed.auditLogs)) {
+      store.auditLogs = (parsed.auditLogs as Array<Record<string, unknown>>).map(
+        (l) => reviveDates(l, ['created_at']) as unknown as AuditLogRow
+      );
+    }
+    if (typeof parsed.auditLogSeq === 'number' && Number.isFinite(parsed.auditLogSeq)) {
+      store.auditLogSeq = parsed.auditLogSeq;
+    }
+    if (Array.isArray(parsed.phoneAccounts)) {
+      for (const [k, v] of parsed.phoneAccounts as Array<[string, Record<string, unknown>]>) {
+        store.phoneAccounts.set(
+          k,
+          reviveDates(v, ['created_at', 'updated_at']) as unknown as PhoneAccountRow
+        );
+      }
+    }
+    return store;
+  } catch (err) {
+    console.warn('[InMemoryDB] Failed to load persisted fallback store, starting fresh:', err);
+    return createEmptyStore();
+  }
+}
+
+function persistStore(store: StoreState): void {
+  if (PERSIST_DISABLED) return;
+  try {
+    fs.mkdirSync(path.dirname(FALLBACK_STORE_PATH), { recursive: true });
+    const serialized = JSON.stringify({
+      users: Array.from(store.users.entries()),
+      wallets: Array.from(store.wallets.entries()),
+      walletTransactions: store.walletTransactions,
+      depositRequests: Array.from(store.depositRequests.entries()),
+      withdrawalRequests: Array.from(store.withdrawalRequests.entries()),
+      referrals: Array.from(store.referrals.entries()),
+      paymentSettings: store.paymentSettings,
+      auditLogs: store.auditLogs,
+      auditLogSeq: store.auditLogSeq,
+      phoneAccounts: Array.from(store.phoneAccounts.entries()),
+    });
+    const tmpPath = `${FALLBACK_STORE_PATH}.tmp`;
+    fs.writeFileSync(tmpPath, serialized, 'utf8');
+    fs.renameSync(tmpPath, FALLBACK_STORE_PATH);
+  } catch (err) {
+    console.warn('[InMemoryDB] Could not persist fallback store:', err);
+  }
+}
+
+let activeStore: StoreState = loadPersistedStore();
 
 function makeResult<T extends QueryResultRow>(rows: unknown[]): QueryResult<T> {
   return {
@@ -470,13 +591,16 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
   }
 
   // wallets
-  if (sql.startsWith('INSERT INTO wallets (user_id) VALUES ($1)')) {
+  if (sql.startsWith('INSERT INTO wallets (')) {
     const uid = String(params[0]);
+    const hasInitialAmounts = sql.includes('balance') && params.length >= 3;
+    const initialBalance = hasInitialAmounts ? toFixedMoney(Number.parseFloat(String(params[1] ?? '0'))) : '0.00';
+    const initialLocked = hasInitialAmounts ? toFixedMoney(Number.parseFloat(String(params[2] ?? '0'))) : '0.00';
     if (!store.wallets.has(uid)) {
       store.wallets.set(uid, {
         user_id: uid,
-        balance: '0.00',
-        invite_bonus_locked: '0.00',
+        balance: initialBalance,
+        invite_bonus_locked: initialLocked,
         total_deposited: '0.00',
         total_withdrawn: '0.00',
         version: 1,
@@ -998,7 +1122,12 @@ export async function runInMemoryQuery<T extends QueryResultRow = QueryResultRow
   text: string,
   params: readonly unknown[] = []
 ): Promise<QueryResult<T>> {
-  return executeInMemoryQuery<T>(activeStore, text, params);
+  const result = executeInMemoryQuery<T>(activeStore, text, params);
+  const upper = normalizeSql(text).toUpperCase();
+  if (upper.startsWith('INSERT') || upper.startsWith('UPDATE') || upper.startsWith('DELETE')) {
+    persistStore(activeStore);
+  }
+  return result;
 }
 
 let txQueue: Promise<unknown> = Promise.resolve();
@@ -1018,6 +1147,7 @@ export async function runInMemoryTransaction<T>(
 
     const result = await callback(mockClient);
     activeStore = txStore;
+    persistStore(activeStore);
     return result;
   };
 

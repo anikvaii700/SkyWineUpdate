@@ -1,7 +1,49 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { phoneAuthLimiter } from '../middleware/rateLimit.ts';
 import { loginWithPhonePassword, signupWithPhonePassword } from '../services/phoneAuth.ts';
+
+export const PHONE_SESSION_COOKIE_NAME = 'skywin_session';
+const SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+
+function isHttpsRequest(req: Request): boolean {
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const proto = Array.isArray(forwardedProto)
+    ? forwardedProto[0]?.split(',')[0]?.trim()
+    : forwardedProto?.split(',')[0]?.trim();
+  return req.secure || proto === 'https';
+}
+
+function setPhoneSessionCookie(req: Request, res: Response, token: string): void {
+  const encoded = encodeURIComponent(token);
+  const baseParts = [
+    `${PHONE_SESSION_COOKIE_NAME}=${encoded}`,
+    'Path=/',
+    `Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`,
+    'HttpOnly',
+  ];
+  if (isHttpsRequest(req)) {
+    baseParts.push('Secure', 'SameSite=None', 'Partitioned');
+  } else {
+    baseParts.push('SameSite=Lax');
+  }
+  res.append('Set-Cookie', baseParts.join('; '));
+}
+
+function clearPhoneSessionCookie(req: Request, res: Response): void {
+  const baseParts = [
+    `${PHONE_SESSION_COOKIE_NAME}=`,
+    'Path=/',
+    'Max-Age=0',
+    'HttpOnly',
+  ];
+  if (isHttpsRequest(req)) {
+    baseParts.push('Secure', 'SameSite=None', 'Partitioned');
+  } else {
+    baseParts.push('SameSite=Lax');
+  }
+  res.append('Set-Cookie', baseParts.join('; '));
+}
 
 const phoneSignupSchema = z
   .object({
@@ -46,10 +88,16 @@ export function createPhoneAuthRouter(): Router {
         password: body.password,
         referralCode: body.referralCode,
       });
+      setPhoneSessionCookie(req, res, result.token);
       res.json({ ok: true, ...result });
     } catch (err) {
       next(err);
     }
+  });
+
+  router.post('/auth/logout', (req, res) => {
+    clearPhoneSessionCookie(req, res);
+    res.json({ ok: true });
   });
 
   return router;

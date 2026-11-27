@@ -10,6 +10,7 @@ import {
   mapWalletRow,
   normalizePhone,
   updateUserProfile,
+  WELCOME_BONUS_FIXED,
 } from './walletLedger.ts';
 
 const PHONE_TOKEN_PREFIX = 'skywin_phone_v1.';
@@ -240,8 +241,15 @@ export async function signupWithPhonePassword(input: {
       );
 
       const insertedWallet = await client.query(
-        `INSERT INTO wallets (user_id) VALUES ($1) RETURNING *`,
-        [uid]
+        `INSERT INTO wallets (user_id, balance, invite_bonus_locked) VALUES ($1, $2, $3) RETURNING *`,
+        [uid, WELCOME_BONUS_FIXED, WELCOME_BONUS_FIXED]
+      );
+
+      await client.query(
+        `INSERT INTO wallet_transactions
+           (user_id, type, direction, amount, balance_before, balance_after, reference_type, reference_id, idempotency_key, note, created_by)
+         VALUES ($1, 'deposit_bonus', 'credit', $2, '0.00', $2, 'welcome_bonus', $1, $3, $4, 'system')`,
+        [uid, WELCOME_BONUS_FIXED, `welcome_bonus:${uid}`, 'ওয়েলকাম বোনাস (৳১০০)']
       );
 
       if (referredByUid) {

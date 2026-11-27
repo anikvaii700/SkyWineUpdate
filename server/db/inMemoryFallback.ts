@@ -145,6 +145,7 @@ interface PhoneAccountRow {
   user_uid: string;
   password_hash: string;
   password_salt: string;
+  phone_verified: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -329,6 +330,23 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
     return makeResult<T>(match ? [{ firebase_uid: match.firebase_uid }] : []);
   }
 
+  if (sql.startsWith('SELECT 1 FROM users WHERE firebase_uid = $1 OR phone_number = $2')) {
+    const uid = String(params[0]);
+    const phone = String(params[1]);
+    const match = Array.from(store.users.values()).find(
+      (u) => u.firebase_uid === uid || u.phone_number === phone
+    );
+    return makeResult<T>(match ? [{ '?column?': 1 }] : []);
+  }
+
+  if (sql.startsWith('SELECT 1 FROM users WHERE user_code = $1 OR referral_code = $1')) {
+    const code = String(params[0]);
+    const match = Array.from(store.users.values()).find(
+      (u) => u.user_code === code || u.referral_code === code
+    );
+    return makeResult<T>(match ? [{ '?column?': 1 }] : []);
+  }
+
   if (sql.startsWith('INSERT INTO users (')) {
     const uid = String(params[0]);
     const userCode = String(params[1]);
@@ -337,6 +355,13 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
     const phoneNumber = params[4] ? String(params[4]) : null;
     const role = (params[5] === 'admin' ? 'admin' : 'user') as 'user' | 'admin';
     const referralCode = String(params[6]);
+    const referredByUid = params[7] ? String(params[7]) : null;
+
+    if (store.users.has(uid)) {
+      const err = new Error('Duplicate user uid') as Error & { code?: string };
+      err.code = '23505';
+      throw err;
+    }
 
     for (const existing of store.users.values()) {
       if (existing.user_code === userCode || existing.referral_code === referralCode) {
@@ -356,7 +381,7 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
       role,
       status: 'active',
       referral_code: referralCode,
-      referred_by_uid: null,
+      referred_by_uid: referredByUid,
       first_deposit_rewarded: false,
       created_at: now,
       updated_at: now,
@@ -458,7 +483,8 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
         updated_at: new Date(),
       });
     }
-    return makeResult<T>([]);
+    const w = store.wallets.get(uid)!;
+    return makeResult<T>(sql.includes('RETURNING') ? [{ ...w }] : []);
   }
 
   if (sql.startsWith('SELECT * FROM wallets WHERE user_id = $1')) {
@@ -956,6 +982,7 @@ function executeInMemoryQuery<T extends QueryResultRow = QueryResultRow>(
       user_uid: userUid,
       password_hash: String(params[2]),
       password_salt: String(params[3]),
+      phone_verified: Boolean(params[4] ?? false),
       created_at: now,
       updated_at: now,
     };

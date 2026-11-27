@@ -11,6 +11,7 @@ export interface VerifiedFirebaseIdentity {
   name: string | null;
   picture: string | null;
   phoneNumber?: string | null;
+  phoneVerified?: boolean;
 }
 
 export type TokenVerifier = (idToken: string) => Promise<VerifiedFirebaseIdentity>;
@@ -54,6 +55,7 @@ export const defaultTokenVerifier: TokenVerifier = async (idToken: string): Prom
       name: typeof decoded.name === 'string' ? decoded.name : null,
       picture: typeof decoded.picture === 'string' ? decoded.picture : null,
       phoneNumber: verifiedPhone,
+      phoneVerified: Boolean(verifiedPhone),
     };
   } catch (err) {
     if (err instanceof HttpError) throw err;

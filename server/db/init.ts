@@ -18,6 +18,9 @@ export async function initDatabase(): Promise<boolean> {
 
   try {
     await client.query(schemaSql);
+    await client.query(
+      `ALTER TABLE phone_accounts ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT FALSE`
+    );
     await client.query(`INSERT INTO payment_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
     console.info('[DB Init] PostgreSQL schema verified and ready.');
     return true;

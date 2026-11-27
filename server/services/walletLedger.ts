@@ -96,12 +96,12 @@ export function normalizeTrxId(raw: string): string {
   return raw.trim().toUpperCase().replace(/\s+/g, '');
 }
 
-function generateUserCode(): string {
+export function generateUserCode(): string {
   const num = crypto.randomInt(100000, 999999);
   return `USER-${num}`;
 }
 
-function mapUserRow(row: Record<string, unknown>): DbUser {
+export function mapUserRow(row: Record<string, unknown>): DbUser {
   return {
     firebaseUid: String(row.firebase_uid),
     userCode: String(row.user_code),
@@ -118,7 +118,7 @@ function mapUserRow(row: Record<string, unknown>): DbUser {
   };
 }
 
-function mapWalletRow(row: Record<string, unknown>): WalletSummary {
+export function mapWalletRow(row: Record<string, unknown>): WalletSummary {
   const balancePaisa = toPaisa(parseNumeric(row.balance as string));
   const lockedPaisa = toPaisa(parseNumeric(row.invite_bonus_locked as string));
   const withdrawablePaisa = Math.max(0, balancePaisa - lockedPaisa);
@@ -187,7 +187,7 @@ function mapSettingsRow(row: Record<string, unknown>): PublicPaymentSettings {
 
 function isBootstrapAdmin(identity: VerifiedFirebaseIdentity): boolean {
   const phone = identity.phoneNumber ? normalizePhone(identity.phoneNumber) : '';
-  if (phone && env.adminPhones.includes(phone)) return true;
+  if (phone && identity.phoneVerified === true && env.adminPhones.includes(phone)) return true;
   if (!identity.email || !identity.emailVerified) return false;
   return env.adminEmails.includes(identity.email.toLowerCase());
 }

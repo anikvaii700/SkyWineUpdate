@@ -317,7 +317,7 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
     assert.equal(body.code, 'INVALID_PHONE_NUMBER');
   });
 
-  it('signs up a mobile number + password, blocks duplicate registration, and authorizes /api/me & login', async () => {
+  it('signs up a mobile number + password with full contract, blocks duplicate registration, and authorizes /api/me & login', async () => {
     const signupRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -331,16 +331,59 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
     const signupBody = (await signupRes.json()) as {
       ok: boolean;
       token: string;
-      user: { uid: string; phoneNumber: string; displayName: string; role: string };
-      wallet: { balance: number };
+      user: {
+        uid: string;
+        userCode: string;
+        email: string | null;
+        displayName: string;
+        phoneNumber: string;
+        role: string;
+        isAdmin: boolean;
+        status: string;
+        referralCode: string;
+        firstDepositRewarded: boolean;
+      };
+      wallet: {
+        userId: string;
+        balance: number;
+        inviteBonusLocked: number;
+        withdrawableBalance: number;
+        totalDeposited: number;
+        totalWithdrawn: number;
+        version: number;
+      };
     };
     assert.equal(signupBody.ok, true);
     assert.match(signupBody.token, /^skywin_phone_v1\./);
     assert.equal(signupBody.user.uid, 'phone_01711223344');
+    assert.match(signupBody.user.userCode, /^USER-\d{6}$/);
+    assert.equal(signupBody.user.email, null);
     assert.equal(signupBody.user.phoneNumber, '01711223344');
     assert.equal(signupBody.user.displayName, 'Rafiq Test');
     assert.equal(signupBody.user.role, 'user');
+    assert.equal(signupBody.user.isAdmin, false);
+    assert.equal(signupBody.user.status, 'active');
+    assert.equal(signupBody.user.referralCode, signupBody.user.userCode);
+    assert.equal(signupBody.user.firstDepositRewarded, false);
+
+    assert.equal(signupBody.wallet.userId, 'phone_01711223344');
     assert.equal(signupBody.wallet.balance, 0);
+    assert.equal(signupBody.wallet.inviteBonusLocked, 0);
+    assert.equal(signupBody.wallet.withdrawableBalance, 0);
+    assert.equal(signupBody.wallet.totalDeposited, 0);
+    assert.equal(signupBody.wallet.totalWithdrawn, 0);
+    assert.equal(signupBody.wallet.version, 1);
+
+    // Signup token works immediately against /api/me & /api/wallet, and is blocked from /api/admin/*
+    const signupMeRes = await fetch(`${baseUrl}/api/me`, {
+      headers: { Authorization: `Bearer ${signupBody.token}` },
+    });
+    assert.equal(signupMeRes.status, 200);
+
+    const adminAttemptRes = await fetch(`${baseUrl}/api/admin/overview`, {
+      headers: { Authorization: `Bearer ${signupBody.token}` },
+    });
+    assert.equal(adminAttemptRes.status, 403);
 
     // Duplicate registration returns 409
     const dupRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
@@ -376,9 +419,10 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
       }),
     });
     assert.equal(loginRes.status, 200);
-    const loginBody = (await loginRes.json()) as { ok: boolean; token: string; user: { uid: string } };
+    const loginBody = (await loginRes.json()) as { ok: boolean; token: string; user: { uid: string; role: string } };
     assert.equal(loginBody.ok, true);
     assert.equal(loginBody.user.uid, 'phone_01711223344');
+    assert.equal(loginBody.user.role, 'user');
 
     // Authorized /api/me succeeds with issued token
     const meRes = await fetch(`${baseUrl}/api/me`, {
@@ -394,6 +438,89 @@ describe('SkyWinBD Mobile Number & Password Authentication', () => {
       headers: { Authorization: `Bearer ${loginBody.token}tampered` },
     });
     assert.equal(tamperedRes.status, 401);
+  });
+
+  it('rejects mass-assignment fields on phone-signup and supports optional referralCode safely', async () => {
+    const massAssignRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: '01722334455',
+        password: 'secretPass99',
+        role: 'admin',
+        balance: 5000,
+      }),
+    });
+    assert.equal(massAssignRes.status, 400);
+    const massAssignBody = (await massAssignRes.json()) as { code: string };
+    assert.equal(massAssignBody.code, 'VALIDATION_ERROR');
+
+    // Signup with unknown referralCode succeeds cleanly with role='user' and balance=0
+    const refRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: '01722334455',
+        password: 'secretPass99',
+        referralCode: 'NON-EXISTENT-CODE',
+      }),
+    });
+    assert.equal(refRes.status, 201);
+    const refBody = (await refRes.json()) as { ok: boolean; user: { role: string }; wallet: { balance: number } };
+    assert.equal(refBody.ok, true);
+    assert.equal(refBody.user.role, 'user');
+    assert.equal(refBody.wallet.balance, 0);
+  });
+
+  it('never promotes unverified phone accounts to admin even if phone is in ADMIN_PHONES', async () => {
+    const { env } = await import('../config/env.ts');
+    const { ensureUserAndWallet } = await import('../services/walletLedger.ts');
+
+    const mutableAdminPhones = env.adminPhones as unknown as string[];
+    const targetAdminPhone = '01799887766';
+    mutableAdminPhones.push(targetAdminPhone);
+
+    try {
+      const signupRes = await fetch(`${baseUrl}/api/auth/phone-signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: targetAdminPhone,
+          password: 'secretPass99',
+        }),
+      });
+      assert.equal(signupRes.status, 201);
+      const signupBody = (await signupRes.json()) as {
+        token: string;
+        user: { role: string; isAdmin: boolean };
+      };
+      assert.equal(signupBody.user.role, 'user');
+      assert.equal(signupBody.user.isAdmin, false);
+
+      // Subsequent /api/me with unverified phone token must also NOT promote to admin
+      const meRes = await fetch(`${baseUrl}/api/me`, {
+        headers: { Authorization: `Bearer ${signupBody.token}` },
+      });
+      assert.equal(meRes.status, 200);
+      const meBody = (await meRes.json()) as { user: { role: string; isAdmin: boolean } };
+      assert.equal(meBody.user.role, 'user');
+      assert.equal(meBody.user.isAdmin, false);
+
+      // Direct ensureUserAndWallet with phoneVerified: false also stays 'user'
+      const unverifiedDirect = await ensureUserAndWallet({
+        uid: `phone_${targetAdminPhone}`,
+        email: null,
+        emailVerified: false,
+        name: 'Unverified Phone',
+        picture: null,
+        phoneNumber: targetAdminPhone,
+        phoneVerified: false,
+      });
+      assert.equal(unverifiedDirect.role, 'user');
+    } finally {
+      const idx = mutableAdminPhones.indexOf(targetAdminPhone);
+      if (idx !== -1) mutableAdminPhones.splice(idx, 1);
+    }
   });
 
   it('promotes only the first verified Google user when no explicit admin allowlist is configured', async () => {

@@ -8,6 +8,8 @@ import {
   executeLuckySpin,
   executeGuestPreviewSpin,
   isSpinAvailable,
+  getSpinCooldownRemainingMs,
+  formatCooldownHHMM,
   loadBonusState,
   BonusState,
 } from '../services/bonusService';
@@ -414,11 +416,13 @@ export const LuckySpinnerModal: React.FC<LuckySpinnerModalProps> = ({
             <div className="p-3 rounded-2xl bg-[#0e1420] border border-[#233148] text-center space-y-1">
               <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-emerald-400">
                 <CheckCircle2 className="w-4 h-4" />
-                <span>আজকের ফ্রি স্পিন সম্পন্ন হয়েছে!</span>
+                <span>আপনার ফ্রি স্পিন সম্পন্ন হয়েছে!</span>
               </div>
               <p className="text-[11px] text-slate-400 flex items-center justify-center gap-1 font-mono">
                 <Clock className="w-3.5 h-3.5 text-amber-400" />
-                <span>পরবর্তী ফ্রি স্পিন আগামীকাল পাবেন</span>
+                <span>
+                  পরবর্তী ফ্রি স্পিন {formatCooldownHHMM(getSpinCooldownRemainingMs(currentUser?.uid))} পর পাবেন
+                </span>
               </p>
             </div>
           )}

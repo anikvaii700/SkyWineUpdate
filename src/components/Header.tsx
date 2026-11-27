@@ -39,18 +39,15 @@ export const Header: React.FC<HeaderProps> = ({
   isMuted,
   onToggleSound,
 }) => {
-  // Stealth method: Tap the SkyWin brand logo 5 times to open Admin Panel
-  // STRICT: Only allowed if logged in as 01743224700. For everyone else, zero hint or access.
+  // Stealth method: Tap the SkyWin brand logo 5 times to open Admin Panel (verified server-side)
   const logoClicksRef = useRef<number>(0);
   const firstClickTimeRef = useRef<number>(0);
   const isAdmin = currentUser?.isAdmin === true;
 
-  const handleLogoClick = (e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault();
+  const handleLogoClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
 
-    // If not the authorized admin 01743224700, behave as ordinary tap with zero admin logic
-    if (!isAdmin) {
+    if (!currentUser) {
       soundManager.playClick();
       return;
     }
@@ -66,7 +63,11 @@ export const Header: React.FC<HeaderProps> = ({
     if (nextCount >= 5) {
       logoClicksRef.current = 0;
       firstClickTimeRef.current = 0;
-      soundManager.playWin();
+      if (isAdmin) {
+        soundManager.playWin();
+      } else {
+        soundManager.playClick();
+      }
       onOpenAdmin();
     } else {
       soundManager.playClick();
@@ -91,9 +92,10 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
 
         {/* 2. SkyWin Brand / Logo (Tap 5 times for Admin) */}
-        <div 
+        <button
+          type="button"
           onClick={handleLogoClick}
-          className="flex items-center gap-1 cursor-pointer select-none active:scale-95 transition-transform relative touch-manipulation shrink-0"
+          className="flex items-center gap-1 py-1 pr-1.5 bg-transparent border-0 cursor-pointer select-none active:scale-95 transition-transform relative touch-manipulation shrink-0 focus:outline-none"
           style={{ WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' }}
           data-no-exit="true"
           title="SkyWin BD"
@@ -102,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#FF2B36] via-[#FF5E62] to-[#FF9900]">SkyWin</span>
             <span className="text-[9px] sm:text-[10px] font-black text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1 py-0.2 rounded not-italic tracking-normal">BD</span>
           </span>
-        </div>
+        </button>
 
         {/* 3. বোনাস (Bonus Hub: Daily Bonus & Lucky Spin) */}
         {onOpenBonusHub && (

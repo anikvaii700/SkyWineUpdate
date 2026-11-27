@@ -114,8 +114,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           // Admin rights come from the server's verified ADMIN_EMAILS allowlist.
           // Store the owner's designated phone on that verified admin profile for UI routing.
           if (me.user.isAdmin && me.user.status === 'active' && me.user.phoneNumber !== '01743224700') {
-            await backendApi.updateProfile({ phoneNumber: '01743224700' });
-            me = await backendApi.getMe();
+            await backendApi.updateProfile({ phoneNumber: '01743224700' }).catch(() => {});
+            me = await backendApi.getMe().catch(() => me);
           }
           profile = mapBackendMeToProfile(me, fbUser);
           appUser = {

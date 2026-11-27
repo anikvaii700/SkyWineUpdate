@@ -51,9 +51,35 @@ function isTrustedCookieMutation(req: Request): boolean {
   const forwardedHost = Array.isArray(forwardedHostRaw)
     ? forwardedHostRaw[0]?.split(',')[0]?.trim()
     : forwardedHostRaw?.split(',')[0]?.trim();
-  const allowedHosts = [req.headers.host, forwardedHost].filter((h): h is string => Boolean(h));
+  const ngAllowedHosts = (process.env.NG_ALLOWED_HOSTS || '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const envUrlHosts: string[] = [];
+  for (const rawUrl of [process.env.APP_URL, process.env.SHARED_APP_URL]) {
+    if (!rawUrl) continue;
+    try {
+      envUrlHosts.push(new URL(rawUrl).host);
+    } catch {
+      // Ignore invalid URL env value.
+    }
+  }
 
-  if (allowedHosts.some((h) => origin === `https://${h}` || origin === `http://${h}`)) {
+  const baseHosts = [req.headers.host, forwardedHost, ...ngAllowedHosts, ...envUrlHosts].filter(
+    (h): h is string => Boolean(h)
+  );
+  const allowedHosts = new Set<string>(baseHosts);
+  for (const h of baseHosts) {
+    const aiStudioMatch = /^ais-(dev|pre|mob)-(.+)$/i.exec(h);
+    if (aiStudioMatch) {
+      const suffix = aiStudioMatch[2];
+      allowedHosts.add(`ais-dev-${suffix}`);
+      allowedHosts.add(`ais-pre-${suffix}`);
+      allowedHosts.add(`ais-mob-${suffix}`);
+    }
+  }
+
+  if (Array.from(allowedHosts).some((h) => origin === `https://${h}` || origin === `http://${h}`)) {
     return true;
   }
 

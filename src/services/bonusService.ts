@@ -49,12 +49,14 @@ export interface BonusState {
 
   // 3. Daily Lucky Spinner
   lastSpinDate: string; // YYYY-MM-DD
+  lastSpinTimestamp?: number; // Epoch ms of last spin (24-hour cooldown)
   totalSpins: number;
   lastWonAmount: number | null;
 }
 
 const STORAGE_BONUS_KEY_PREFIX = 'skywin_bonus_state_v1_';
 export const TARGET_STREAK_SECONDS = 300; // 5 minutes required daily
+export const SPIN_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Returns formatted YYYY-MM-DD string according to local time
@@ -97,6 +99,7 @@ export function createInitialBonusState(): BonusState {
     todayQualified: false,
     weeklyBonusesAwarded: 0,
     lastSpinDate: '',
+    lastSpinTimestamp: 0,
     totalSpins: 0,
     lastWonAmount: null,
   };
@@ -255,12 +258,44 @@ export function recordActiveTime(
 }
 
 /**
- * Check if the Lucky Spinner is available to spin today
+ * Check if the Lucky Spinner is available (hidden for full 24 hours after each spin)
  */
 export function isSpinAvailable(userId?: string): boolean {
   const state = loadBonusState(userId);
+  if (typeof state.lastSpinTimestamp === 'number' && state.lastSpinTimestamp > 0) {
+    return Date.now() - state.lastSpinTimestamp >= SPIN_COOLDOWN_MS;
+  }
   const today = getLocalDateString();
   return state.lastSpinDate !== today;
+}
+
+/**
+ * Remaining cooldown in milliseconds until the next spin becomes available
+ */
+export function getSpinCooldownRemainingMs(userId?: string): number {
+  const state = loadBonusState(userId);
+  if (typeof state.lastSpinTimestamp === 'number' && state.lastSpinTimestamp > 0) {
+    return Math.max(0, SPIN_COOLDOWN_MS - (Date.now() - state.lastSpinTimestamp));
+  }
+  const today = getLocalDateString();
+  if (state.lastSpinDate === today) {
+    const tomorrow = new Date();
+    tomorrow.setHours(24, 0, 0, 0);
+    return Math.max(0, tomorrow.getTime() - Date.now());
+  }
+  return 0;
+}
+
+/**
+ * Format remaining cooldown milliseconds into Bengali hours/minutes text
+ */
+export function formatCooldownHHMM(ms: number): string {
+  const totalMinutes = Math.max(1, Math.ceil(ms / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours} ঘণ্টা ${minutes} মিনিট`;
+  if (hours > 0) return `${hours} ঘণ্টা`;
+  return `${minutes} মিনিট`;
 }
 
 /**
@@ -324,6 +359,7 @@ export function executeLuckySpin(userId?: string): {
 
   const selectedSector = WHEEL_SECTORS[selectedIndex];
   state.lastSpinDate = today;
+  state.lastSpinTimestamp = Date.now();
   state.totalSpins = (state.totalSpins || 0) + 1;
   state.lastWonAmount = selectedSector.amount;
 
@@ -356,6 +392,7 @@ export function executeGuestPreviewSpin(): {
   const sector = WHEEL_SECTORS[sectorIndex];
 
   state.lastSpinDate = today;
+  state.lastSpinTimestamp = Date.now();
   state.totalSpins = (state.totalSpins || 0) + 1;
   state.lastWonAmount = null;
   saveBonusState(state);

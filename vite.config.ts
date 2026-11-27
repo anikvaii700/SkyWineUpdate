@@ -10,7 +10,7 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'prompt',
+        registerType: 'autoUpdate',
         includeAssets: [
           'apple-touch-icon.png',
           'favicon.png',
@@ -65,7 +65,7 @@ export default defineConfig(() => {
           // API responses must never be cached or replaced by the SPA navigation fallback.
           // Leaving /api/* out of runtimeCaching ensures the Service Worker passes them straight to the browser.
           navigateFallbackDenylist: [/^\/api\//],
-          // The new worker waits until the user chooses to update.
+          skipWaiting: true,
           clientsClaim: true,
           cleanupOutdatedCaches: true,
         },

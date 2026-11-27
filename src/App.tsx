@@ -162,6 +162,7 @@ export default function App() {
   const [isBonusHubOpen, setIsBonusHubOpen] = useState<boolean>(false);
   const [activeSecondsToday, setActiveSecondsToday] = useState<number>(0);
   const [hasUnclaimedBonus, setHasUnclaimedBonus] = useState<boolean>(false);
+  const [isSpinWidgetAvailable, setIsSpinWidgetAvailable] = useState<boolean>(() => isSpinAvailable(undefined));
   const hasAutoPromptedReferralAuthRef = useRef<boolean>(false);
   const capturedUrlReferralRef = useRef<string | null>(null);
 
@@ -972,17 +973,23 @@ export default function App() {
     return () => clearInterval(reminderInterval);
   }, [showSplash]);
 
-  // Check unclaimed bonus status safely in an effect instead of calling loadBonusState during render
+  // Check unclaimed bonus & 24-hour spinner visibility status safely in an effect
   useEffect(() => {
     const checkBonus = () => {
       try {
-        setHasUnclaimedBonus(isDailyBonusAvailable(currentUser?.uid) || isSpinAvailable(currentUser?.uid));
+        const spinReady = isSpinAvailable(currentUser?.uid);
+        setIsSpinWidgetAvailable(spinReady);
+        setHasUnclaimedBonus(isDailyBonusAvailable(currentUser?.uid) || spinReady);
       } catch {}
     };
     checkBonus();
     const handleBonusEvent = () => checkBonus();
     window.addEventListener('skywin_bonus_state_updated', handleBonusEvent);
-    return () => window.removeEventListener('skywin_bonus_state_updated', handleBonusEvent);
+    const cooldownTimer = window.setInterval(checkBonus, 30000);
+    return () => {
+      window.removeEventListener('skywin_bonus_state_updated', handleBonusEvent);
+      window.clearInterval(cooldownTimer);
+    };
   }, [currentUser?.uid, isBonusHubOpen, isSpinnerOpen]);
 
   // 4. Admin Broadcast Notification Live Listener (Requirement 4: "এডমিন প্যানেলে অপশন থাকবে: ইউজারকে নটিফিকেশন পাঠান")
@@ -1870,6 +1877,40 @@ export default function App() {
     setIsAppClosed(true);
   }, []);
 
+  const handleStealthAdminOpen = useCallback(async () => {
+    if (currentUser?.isAdmin === true) {
+      setIsAdminOpen(true);
+      return;
+    }
+    if (!auth.currentUser) return;
+    try {
+      const me = await backendApi.getMe();
+      if (me.user.isAdmin === true) {
+        const profile = mapBackendMeToProfile(me, auth.currentUser);
+        const updatedUser: AppUser = {
+          uid: auth.currentUser.uid,
+          userCode: me.user.userCode,
+          referralCode: me.user.referralCode,
+          displayName: me.user.displayName || auth.currentUser.displayName || 'Player',
+          email: auth.currentUser.email,
+          phoneNumber: me.user.phoneNumber || auth.currentUser.phoneNumber || null,
+          photoURL: auth.currentUser.photoURL,
+          provider: currentUser?.provider || 'google',
+          isAdmin: true,
+          status: me.user.status as AppUser['status'],
+        };
+        currentUserRef.current = updatedUser;
+        serverWalletBalanceRef.current = me.wallet.balance;
+        setCurrentUser(updatedUser);
+        setUserProfile(profile);
+        soundManager.playWin();
+        setIsAdminOpen(true);
+      }
+    } catch {
+      // Remain completely silent if server rejects or user is not an admin.
+    }
+  }, [currentUser]);
+
   const handleOpenAdminPanelWithTab = (tab?: 'requests' | 'withdrawals') => {
     if (currentUser?.isAdmin !== true) return;
     if (tab) setAdminPanelInitialTab(tab);
@@ -1880,7 +1921,7 @@ export default function App() {
     if (currentUser?.isAdmin !== true && isAdminOpen) {
       setIsAdminOpen(false);
     }
-  }, [currentUser?.phoneNumber, isAdminOpen]);
+  }, [currentUser?.isAdmin, isAdminOpen]);
 
   // Clean Native-like App Closed Screen (like Facebook, YouTube exit on phone)
   if (isAppClosed) {
@@ -1947,9 +1988,7 @@ export default function App() {
           onOpenWithdraw={handleOpenWithdraw}
           onOpenRules={() => setIsRulesOpen(true)}
           onOpenAdmin={() => {
-            if (currentUser?.isAdmin === true) {
-              setIsAdminOpen(true);
-            }
+            void handleStealthAdminOpen();
           }}
           onOpenBonusHub={handleOpenBonusHub}
           hasUnclaimedBonus={hasUnclaimedBonus}
@@ -2093,7 +2132,7 @@ export default function App() {
               myBetHistory={myBetHistory}
               lang={lang}
               onOpenSpinner={handleOpenSpinner}
-              showSpinnerWidget={appControls.luckySpinnerEnabled}
+              showSpinnerWidget={appControls.luckySpinnerEnabled && isSpinWidgetAvailable}
             />
           </>
         )}

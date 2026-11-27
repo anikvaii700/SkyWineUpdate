@@ -69,13 +69,14 @@ function resolveApiUrl(path: string): string {
 
 async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const retryDelaysMs = [450, 1100];
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
     try {
       const response = await fetch(url, init);
       const contentType = response.headers.get('content-type') || '';
       const isHtml = contentType.includes('text/html');
-      if (isHtml && attempt === 0) {
-        await new Promise((r) => setTimeout(r, 350));
+      if (isHtml && attempt < retryDelaysMs.length) {
+        await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]));
         continue;
       }
       if (isHtml) {
@@ -90,8 +91,8 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
     } catch (err) {
       if (err instanceof ApiClientError) throw err;
       lastError = err;
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 350));
+      if (attempt < retryDelaysMs.length) {
+        await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]));
         continue;
       }
     }

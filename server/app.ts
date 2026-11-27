@@ -57,9 +57,30 @@ export function createApp(options: CreateAppOptions = {}): Express {
         .map((h) => h.trim())
         .filter(Boolean);
 
-      const allowedSameOriginHosts = new Set<string>(
-        [hostHeader, forwardedHost, ...ngAllowedHosts].filter((h): h is string => Boolean(h))
+      const envUrlHosts: string[] = [];
+      for (const rawUrl of [process.env.APP_URL, process.env.SHARED_APP_URL]) {
+        if (!rawUrl) continue;
+        try {
+          envUrlHosts.push(new URL(rawUrl).host);
+        } catch {
+          // Ignore invalid URL env value.
+        }
+      }
+
+      const baseHosts = [hostHeader, forwardedHost, ...ngAllowedHosts, ...envUrlHosts].filter(
+        (h): h is string => Boolean(h)
       );
+
+      const allowedSameOriginHosts = new Set<string>(baseHosts);
+      for (const h of baseHosts) {
+        const aiStudioMatch = /^ais-(dev|pre|mob)-(.+)$/i.exec(h);
+        if (aiStudioMatch) {
+          const suffix = aiStudioMatch[2];
+          allowedSameOriginHosts.add(`ais-dev-${suffix}`);
+          allowedSameOriginHosts.add(`ais-pre-${suffix}`);
+          allowedSameOriginHosts.add(`ais-mob-${suffix}`);
+        }
+      }
 
       const isSameOrigin = Array.from(allowedSameOriginHosts).some(
         (h) => normalizedOrigin === `https://${h}` || normalizedOrigin === `http://${h}`

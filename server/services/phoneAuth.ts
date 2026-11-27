@@ -248,8 +248,20 @@ export async function signupWithPhonePassword(input: {
       await client.query(
         `INSERT INTO wallet_transactions
            (user_id, type, direction, amount, balance_before, balance_after, reference_type, reference_id, idempotency_key, note, created_by)
-         VALUES ($1, 'deposit_bonus', 'credit', $2, '0.00', $2, 'welcome_bonus', $1, $3, $4, 'system')`,
-        [uid, WELCOME_BONUS_FIXED, `welcome_bonus:${uid}`, 'ওয়েলকাম বোনাস (৳১০০)']
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          uid,
+          'deposit_bonus',
+          'credit',
+          WELCOME_BONUS_FIXED,
+          '0.00',
+          WELCOME_BONUS_FIXED,
+          'welcome_bonus',
+          uid,
+          `welcome_bonus:${uid}`,
+          'ওয়েলকাম বোনাস (৳১০০)',
+          'system',
+        ]
       );
 
       if (referredByUid) {

@@ -1,12 +1,12 @@
 {
-  "projectId": "gen-lang-client-0030128766",
-  "appId": "1:306107095736:web:774372919899c6c29eb24d",
-  "apiKey": "AIzaSyB3-dDxNtTkOzioXqekQVzPDclfbit8iOw",
-  "authDomain": "gen-lang-client-0030128766.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-skywineupdate-f21c6f40-7f09-47a2-8405-2d3d0b4e5d7f",
-  "storageBucket": "gen-lang-client-0030128766.firebasestorage.app",
-  "messagingSenderId": "306107095736",
+  "projectId": "ai-studio-applet-webapp-98aca",
+  "appId": "1:1029341777207:web:3beaf70a1947add7669eb2",
+  "apiKey": "AIzaSyA-LefFtnBaA_iYwxf1t1lXMiqzathf5lc",
+  "authDomain": "ai-studio-applet-webapp-98aca.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-skywineupdate-c4ded9cd-7972-4285-b675-de7f5fbcc81f",
+  "storageBucket": "ai-studio-applet-webapp-98aca.firebasestorage.app",
+  "messagingSenderId": "1029341777207",
   "measurementId": "",
-  "oAuthClientId": "306107095736-j8v9b56alebbet06ckprauea0v36c27i.apps.googleusercontent.com",
+  "oAuthClientId": "1029341777207-aekah5m81sbv99bvebdq5asbqonmc1bn.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

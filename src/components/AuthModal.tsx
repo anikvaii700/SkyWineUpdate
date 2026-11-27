@@ -35,7 +35,7 @@ import {
   loginPhoneAccount,
   logoutPhoneSession,
 } from '../services/phoneAuth';
-import { buildReferralLink, getPendingReferralCode } from '../services/referralService';
+import { buildReferralLink, clearPendingReferralCode, getPendingReferralCode } from '../services/referralService';
 import { soundManager } from '../services/audio';
 import { ApiClientError, backendApi, mapBackendMeToProfile, setBackendAuthToken } from '../services/backendApi';
 
@@ -215,9 +215,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
 
         soundManager.playWin();
-        setSuccessMsg('মোবাইল নাম্বার দিয়ে সাইনআপ সফল হয়েছে!');
-        onLoginSuccess(res.user, res.profile);
-        onClose();
+        clearPendingReferralCode();
+        setPhoneNumber('');
+        setPassword('');
+        setConfirmPassword('');
+        setFullName('');
+        setReferralCodeInput('');
+        setHasAutoCapturedRef(false);
+        setAuthMode('login');
+        setSuccessMsg('সাইনআপ সফল হয়েছে! এখন আপনার রেজিস্ট্রিকৃত মোবাইল নাম্বার ও পাসওয়ার্ড দিয়ে লগইন করুন।');
       } else {
         const res = await loginPhoneAccount(normalized, password, referralCodeInput);
         if (!res.success || !res.user || !res.profile) {

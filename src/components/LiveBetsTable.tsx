@@ -3,6 +3,8 @@ import { LivePlayerBet } from '../types/game';
 import { Language, translations } from '../utils/i18n';
 import { Trophy, Radio, Flame } from 'lucide-react';
 import { useActivePlayers } from '../services/activePlayersService';
+import { WHEEL_SECTORS } from '../services/bonusService';
+import { soundManager } from '../services/audio';
 
 interface LiveBetsTableProps {
   livePlayers: LivePlayerBet[];
@@ -14,12 +16,16 @@ interface LiveBetsTableProps {
     timestamp: number;
   }>;
   lang: Language;
+  onOpenSpinner?: () => void;
+  showSpinnerWidget?: boolean;
 }
 
 export const LiveBetsTable: React.FC<LiveBetsTableProps> = ({
   livePlayers,
   myBetHistory,
   lang,
+  onOpenSpinner,
+  showSpinnerWidget = true,
 }) => {
   const t = translations[lang];
 
@@ -46,35 +52,102 @@ export const LiveBetsTable: React.FC<LiveBetsTableProps> = ({
 
   const currentTopWin = topWins[topWinIndex];
 
+  const miniSectorAngle = 360 / WHEEL_SECTORS.length;
+
   return (
     <div className="bg-[#121824] border border-[#1f2a3e] rounded-2xl p-2.5 sm:p-3.5 shadow-xl select-none">
-      {/* Clean Single Header */}
-      <div className="flex items-center justify-between border-b border-[#1f2a3e] pb-2 mb-2">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-xs font-black tracking-wide text-white">
-            লাইভ প্লেয়ার্স ও বাজি
+      {/* Header with Live Players Counter + Mini Rotating Spinner directly below it */}
+      <div className="flex items-start justify-between gap-2 border-b border-[#1f2a3e] pb-2.5 mb-2">
+        <div className="flex flex-col justify-center self-center min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span className="text-xs font-black tracking-wide text-white truncate">
+              লাইভ প্লেয়ার্স ও বাজি
+            </span>
+          </div>
+          <span className="text-[10px] text-slate-400 mt-1 pl-4">
+            রিয়েল-টাইম বাজি ও সেরা বিজয়ী
           </span>
         </div>
 
-        {/* Live Active Players Counter: NEVER below 100, ranges 100 - 1000+, occasionally 1000+ */}
-        <div 
-          className={`flex items-center gap-1.5 text-[11px] bg-[#0c1018] px-2.5 py-1 rounded-full border transition-all duration-300 font-mono ${
-            isSurge 
-              ? 'border-amber-500/60 bg-gradient-to-r from-amber-500/10 to-[#0c1018] text-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.25)]' 
-              : 'border-emerald-500/40 text-slate-300 shadow-xs'
-          }`}
-          title="বর্তমানে অনলাইন সক্রিয় মোট প্লেয়ার সংখ্যা"
-        >
-          {isSurge ? (
-            <Flame className="w-3.5 h-3.5 text-amber-400 animate-bounce" />
-          ) : (
-            <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+        {/* Right column: Active Online Players Counter + Rotating Mini Spinner below it */}
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          {/* Live Active Players Counter: NEVER below 100, ranges 100 - 1000+, occasionally 1000+ */}
+          <div
+            className={`flex items-center gap-1.5 text-[11px] bg-[#0c1018] px-2.5 py-1 rounded-full border transition-all duration-300 font-mono ${
+              isSurge
+                ? 'border-amber-500/60 bg-gradient-to-r from-amber-500/10 to-[#0c1018] text-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.25)]'
+                : 'border-emerald-500/40 text-slate-300 shadow-xs'
+            }`}
+            title="বর্তমানে অনলাইন সক্রিয় মোট প্লেয়ার সংখ্যা"
+          >
+            {isSurge ? (
+              <Flame className="w-3.5 h-3.5 text-amber-400 animate-bounce" />
+            ) : (
+              <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+            )}
+            <span className={`font-black tracking-tight tabular-nums ${isSurge ? 'text-amber-300 text-xs' : 'text-emerald-300 text-xs'}`}>
+              {formattedCount}
+            </span>
+            <span className="text-slate-300 text-[10px]">জন সক্রিয়</span>
+          </div>
+
+          {/* Mini Rotating Lucky Spinner Popup directly under the online count */}
+          {showSpinnerWidget && onOpenSpinner && (
+            <button
+              type="button"
+              onClick={() => {
+                soundManager.playClick();
+                onOpenSpinner();
+              }}
+              aria-label="Spin Now - লাকি স্পিনার খুলুন"
+              title="লাকি স্পিনার খুলতে ক্লিক করুন"
+              className="group flex flex-col items-center justify-center rounded-xl bg-gradient-to-b from-[#1d172c] to-[#0e1320] border border-amber-400/50 hover:border-amber-300 px-2.5 py-1.5 shadow-[0_4px_14px_rgba(245,158,11,0.24)] hover:shadow-[0_6px_18px_rgba(245,158,11,0.38)] active:scale-95 transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 min-w-[68px]"
+            >
+              {/* Top golden pointer */}
+              <span
+                aria-hidden="true"
+                className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] border-t-amber-300 -mb-1 z-10 drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]"
+              />
+
+              {/* Continuously spinning mini lucky wheel */}
+              <svg
+                viewBox="0 0 100 100"
+                className="w-10 h-10 animate-spin-slow drop-shadow-[0_2px_6px_rgba(0,0,0,0.65)]"
+                aria-hidden="true"
+              >
+                <circle cx="50" cy="50" r="47" fill="#1b1528" stroke="#f59e0b" strokeWidth="4" />
+                {WHEEL_SECTORS.map((sector, idx) => {
+                  const startDeg = idx * miniSectorAngle - 90;
+                  const endDeg = (idx + 1) * miniSectorAngle - 90;
+                  const startRad = (startDeg * Math.PI) / 180;
+                  const endRad = (endDeg * Math.PI) / 180;
+                  const r = 44;
+                  const x1 = 50 + r * Math.cos(startRad);
+                  const y1 = 50 + r * Math.sin(startRad);
+                  const x2 = 50 + r * Math.cos(endRad);
+                  const y2 = 50 + r * Math.sin(endRad);
+                  const pathD = `M 50 50 L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
+                  return (
+                    <path
+                      key={sector.id}
+                      d={pathD}
+                      fill={sector.color}
+                      stroke="#0f172a"
+                      strokeWidth="1.2"
+                    />
+                  );
+                })}
+                <circle cx="50" cy="50" r="12" fill="#fbbf24" stroke="#78350f" strokeWidth="2.5" />
+                <circle cx="50" cy="50" r="4.5" fill="#fffbeb" />
+              </svg>
+
+              {/* "Spin Now" text directly underneath the spinning wheel */}
+              <span className="mt-1 px-2 py-0.5 rounded-md bg-gradient-to-r from-amber-400 via-yellow-400 to-orange-400 text-[10px] font-black tracking-tight text-slate-950 whitespace-nowrap leading-none shadow-xs group-hover:brightness-110 transition-all">
+                Spin Now
+              </span>
+            </button>
           )}
-          <span className={`font-black tracking-tight ${isSurge ? 'text-amber-300 text-xs' : 'text-emerald-300 text-xs'}`}>
-            {formattedCount}
-          </span>
-          <span className="text-slate-300 text-[10px]">জন সক্রিয়</span>
         </div>
       </div>
 

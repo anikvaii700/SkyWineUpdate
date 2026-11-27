@@ -413,7 +413,7 @@ export async function registerPhoneAccount(
       ...(referralCodeInput?.trim() ? { referralCode: referralCodeInput.trim() } : {}),
     });
     await logoutUser().catch(() => {});
-    setBackendAuthToken(res.token);
+    setBackendAuthToken(null);
     const profile = mapBackendMeToProfile(res, null);
     const user: AppUser = {
       uid: res.user.uid,

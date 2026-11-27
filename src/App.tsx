@@ -162,7 +162,6 @@ export default function App() {
   const [isBonusHubOpen, setIsBonusHubOpen] = useState<boolean>(false);
   const [activeSecondsToday, setActiveSecondsToday] = useState<number>(0);
   const [hasUnclaimedBonus, setHasUnclaimedBonus] = useState<boolean>(false);
-  const hasAutoPromptedSpinnerRef = useRef<boolean>(false);
   const hasAutoPromptedReferralAuthRef = useRef<boolean>(false);
   const capturedUrlReferralRef = useRef<string | null>(null);
 
@@ -290,7 +289,6 @@ export default function App() {
       !currentUser
     ) {
       hasAutoPromptedReferralAuthRef.current = true;
-      hasAutoPromptedSpinnerRef.current = true;
       setAuthNoticeMessage(
         `রেফারেল লিংক (${capturedUrlReferralRef.current}) শনাক্ত হয়েছে! ফ্রি একাউন্ট তৈরি করুন।`
       );
@@ -861,20 +859,7 @@ export default function App() {
     });
   }, [currentUser, updateBalanceAndSync]);
 
-  // 1. Auto-open Lucky Spinner on app launch (Requirement 3: "অ্যাপ অপেন করলেই পপআপ স্পিনার থাকবে")
-  useEffect(() => {
-    if (!showSplash && !hasAutoPromptedSpinnerRef.current) {
-      hasAutoPromptedSpinnerRef.current = true;
-      if (!appControlsRef.current.luckySpinnerEnabled) return;
-      const canSpin = isSpinAvailable(currentUser?.uid);
-      if (canSpin) {
-        const timer = setTimeout(() => {
-          setIsSpinnerOpen(true);
-        }, 800);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [showSplash, currentUser]);
+  // Lucky Spinner opens on user click from the rotating mini spinner widget below the live players counter.
 
   // 2. Active 5-minute tracker for 7-Day Consecutive Streak (Requirement 2: "মিনিমম ৫ মিনিট অ্যাপ অপেন রাখলে ৩০০৳ সাপ্তাহিক বোনাস")
   useEffect(() => {
@@ -2077,6 +2062,8 @@ export default function App() {
               livePlayers={livePlayers}
               myBetHistory={myBetHistory}
               lang={lang}
+              onOpenSpinner={handleOpenSpinner}
+              showSpinnerWidget={appControls.luckySpinnerEnabled}
             />
           </>
         )}

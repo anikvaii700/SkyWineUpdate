@@ -14,7 +14,7 @@ import {
 } from './walletLedger.ts';
 
 const PHONE_TOKEN_PREFIX = 'skywin_phone_v1.';
-const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const DUMMY_SALT = '00000000000000000000000000000000';
 
 // Read SESSION_SECRET from env if provided; otherwise generate a strong per-process secret in memory.

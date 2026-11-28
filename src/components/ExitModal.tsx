@@ -48,10 +48,10 @@ export const ExitModal: React.FC<ExitModalProps> = ({
             <LogOut className="w-8 h-8 text-red-400" />
           </div>
           <p className="text-base font-bold text-slate-100 mb-1">
-            আপনি কি নিশ্চিতভাবে অ্যাপ ক্লোজ করে এক্সিট করতে চান?
+            আপনি কি অ্যাপ থেকে বের হতে চান?
           </p>
           <p className="text-xs text-slate-400">
-            এক্সিট করলে অ্যাপটি সম্পূর্ণরূপে বন্ধ হয়ে যাবে।
+            অ্যাপ থেকে বের হলে বা বন্ধ করলে আপনার অ্যাকাউন্ট লগআউট হবে না, লগইন অবস্থায় থাকবে।
           </p>
         </div>
 
@@ -64,7 +64,7 @@ export const ExitModal: React.FC<ExitModalProps> = ({
             }}
             className="flex-1 py-2.5 rounded-xl bg-[#1e273a] hover:bg-[#28354c] text-slate-200 font-semibold text-xs transition-colors border border-[#2a3750] active:scale-95 cursor-pointer"
           >
-            না, অ্যাপে থাকুন
+            না
           </button>
 
           <button
@@ -74,7 +74,7 @@ export const ExitModal: React.FC<ExitModalProps> = ({
             }}
             className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 text-white font-bold text-xs shadow-lg shadow-red-700/30 flex items-center justify-center gap-1.5 transition-transform active:scale-95 cursor-pointer"
           >
-            <span>হ্যাঁ, এক্সিট</span>
+            <span>হ্যাঁ</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>

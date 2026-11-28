@@ -4,7 +4,7 @@ import { phoneAuthLimiter } from '../middleware/rateLimit.ts';
 import { loginWithPhonePassword, signupWithPhonePassword } from '../services/phoneAuth.ts';
 
 export const PHONE_SESSION_COOKIE_NAME = 'skywin_session';
-const SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+const SESSION_COOKIE_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
 
 function isHttpsRequest(req: Request): boolean {
   const forwardedProto = req.headers['x-forwarded-proto'];
@@ -16,10 +16,12 @@ function isHttpsRequest(req: Request): boolean {
 
 function setPhoneSessionCookie(req: Request, res: Response, token: string): void {
   const encoded = encodeURIComponent(token);
+  const expiresUtc = new Date(Date.now() + SESSION_COOKIE_MAX_AGE_SECONDS * 1000).toUTCString();
   const baseParts = [
     `${PHONE_SESSION_COOKIE_NAME}=${encoded}`,
     'Path=/',
     `Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`,
+    `Expires=${expiresUtc}`,
     'HttpOnly',
   ];
   if (isHttpsRequest(req)) {

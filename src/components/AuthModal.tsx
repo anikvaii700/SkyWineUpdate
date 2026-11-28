@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   LogIn,
@@ -80,8 +80,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [logoutTapArmed, setLogoutTapArmed] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const logoutTapTimerRef = useRef<number | null>(null);
 
-  // Sync any pending ?ref= referral code when modal opens
+  // Sync any pending ?ref= referral code when modal opens, and reset logout double-tap state
   useEffect(() => {
     if (isOpen && !currentUser) {
       const pending = getPendingReferralCode();
@@ -91,7 +94,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setAuthMode('signup');
       }
     }
+    if (!isOpen || !currentUser) {
+      setLogoutTapArmed(false);
+      setShowLogoutConfirm(false);
+      if (logoutTapTimerRef.current) {
+        window.clearTimeout(logoutTapTimerRef.current);
+        logoutTapTimerRef.current = null;
+      }
+    }
   }, [isOpen, currentUser]);
+
+  useEffect(() => {
+    return () => {
+      if (logoutTapTimerRef.current) {
+        window.clearTimeout(logoutTapTimerRef.current);
+      }
+    };
+  }, []);
 
   if (!isOpen) return null;
 
@@ -252,8 +271,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogoutButtonTap = () => {
     soundManager.playClick();
+    if (!logoutTapArmed) {
+      setLogoutTapArmed(true);
+      if (logoutTapTimerRef.current) {
+        window.clearTimeout(logoutTapTimerRef.current);
+      }
+      logoutTapTimerRef.current = window.setTimeout(() => {
+        setLogoutTapArmed(false);
+        logoutTapTimerRef.current = null;
+      }, 2500);
+      return;
+    }
+
+    if (logoutTapTimerRef.current) {
+      window.clearTimeout(logoutTapTimerRef.current);
+      logoutTapTimerRef.current = null;
+    }
+    setLogoutTapArmed(false);
+    setShowLogoutConfirm(true);
+  };
+
+  const handleConfirmLogout = async () => {
+    soundManager.playClick();
+    setShowLogoutConfirm(false);
+    setLogoutTapArmed(false);
     try {
       await firebaseLogout();
     } catch {}
@@ -493,13 +536,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 );
               })()}
 
-              <button
-                onClick={handleLogout}
-                className="w-full py-3 bg-[#1e273a] hover:bg-rose-900/60 hover:border-rose-700/60 border border-[#2b374e] text-slate-200 hover:text-white font-bold text-xs uppercase tracking-wider rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>লগআউট করুন (Sign Out)</span>
-              </button>
+              <div className="space-y-1.5">
+                <button
+                  type="button"
+                  onClick={handleLogoutButtonTap}
+                  className={`w-full py-3 border font-bold text-xs uppercase tracking-wider rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98] touch-manipulation ${
+                    logoutTapArmed
+                      ? 'bg-rose-900/70 border-rose-500/80 text-white shadow-lg shadow-rose-950/40'
+                      : 'bg-[#1e273a] hover:bg-rose-900/60 hover:border-rose-700/60 border-[#2b374e] text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>
+                    {logoutTapArmed
+                      ? 'আরেকবার ট্যাপ করুন (লগআউট পপআপ)'
+                      : 'লগআউট করুন (ডাবল ট্যাপ)'}
+                  </span>
+                </button>
+                {logoutTapArmed && (
+                  <p className="text-[11px] text-amber-300 text-center animate-fadeIn">
+                    লগআউট নিশ্চিত করতে আরেকবার ট্যাপ করুন
+                  </p>
+                )}
+              </div>
             </div>
           ) : (
             /* Logged out state - Gmail & Password Auth */
@@ -746,6 +805,53 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Double-Tap Logout Confirmation Popup */}
+      {showLogoutConfirm && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn"
+          onClick={() => {
+            soundManager.playClick();
+            setShowLogoutConfirm(false);
+          }}
+        >
+          <div
+            className="bg-[#141a27] border border-rose-500/50 rounded-2xl w-full max-w-xs overflow-hidden shadow-2xl shadow-rose-950/60 text-white animate-scaleUp"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 text-center space-y-2.5">
+              <div className="w-14 h-14 mx-auto rounded-full bg-rose-500/15 border border-rose-500/40 flex items-center justify-center text-rose-400">
+                <LogOut className="w-7 h-7" />
+              </div>
+              <h3 className="text-base font-black text-white">
+                আপনি কি অ্যাপ থেকে বের হতে চান?
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                হ্যাঁ চাপলে আপনার অ্যাকাউন্ট থেকে লগআউট হয়ে যাবে।
+              </p>
+            </div>
+            <div className="p-3.5 bg-[#0e131d] border-t border-[#1e2638] flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  soundManager.playClick();
+                  setShowLogoutConfirm(false);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-[#1e273a] hover:bg-[#28354c] text-slate-200 font-bold text-xs border border-[#2a3750] active:scale-95 transition-all cursor-pointer"
+              >
+                না
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmLogout()}
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs shadow-lg shadow-rose-900/40 active:scale-95 transition-all cursor-pointer"
+              >
+                হ্যাঁ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

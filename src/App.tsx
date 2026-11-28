@@ -488,30 +488,40 @@ export default function App() {
           setUserProfile(profile);
           setBalance(restoredBalance);
         } catch (err) {
-          if (err instanceof ApiClientError && err.code === 'NETWORK_ERROR') {
-            try {
-              const fallback = await buildFirestoreFallbackSession(user);
-              const restoredBalance = Math.max(
-                0,
-                Math.round((fallback.profile.balance + getLocalWalletAdjustment(user.uid)) * 100) / 100
-              );
-              currentUserRef.current = fallback.user;
-              serverWalletBalanceRef.current = fallback.profile.balance;
-              balanceRef.current = restoredBalance;
-              setCurrentUser(fallback.user);
-              setUserProfile(fallback.profile);
-              setBalance(restoredBalance);
-              return;
-            } catch (fallbackErr) {
-              console.error('Firestore fallback profile load failed:', fallbackErr);
-            }
+          console.warn('Server profile load failed, keeping persistent signed-in session:', err);
+          try {
+            const fallback = await buildFirestoreFallbackSession(user);
+            const restoredBalance = Math.max(
+              0,
+              Math.round((fallback.profile.balance + getLocalWalletAdjustment(user.uid)) * 100) / 100
+            );
+            currentUserRef.current = fallback.user;
+            serverWalletBalanceRef.current = fallback.profile.balance;
+            balanceRef.current = restoredBalance;
+            setCurrentUser(fallback.user);
+            setUserProfile(fallback.profile);
+            setBalance(restoredBalance);
+            return;
+          } catch (fallbackErr) {
+            console.warn('Firestore fallback profile load failed, keeping Firebase Auth session:', fallbackErr);
+            const isPhoneAlias = /^user_01[0-9]{9}@phone\.aviator\.bd$/i.test(user.email || '');
+            const isGoogleProvider = user.providerData?.some((p) => p.providerId === 'google.com') ?? false;
+            const extractedPhone = isPhoneAlias
+              ? (user.email || '').replace(/^user_/i, '').replace(/@phone\.aviator\.bd$/i, '')
+              : user.phoneNumber || null;
+            const cachedUser: AppUser = {
+              uid: user.uid,
+              displayName: user.displayName || (extractedPhone ? `User ${extractedPhone}` : 'Player'),
+              email: user.email,
+              phoneNumber: extractedPhone,
+              photoURL: user.photoURL,
+              provider: isPhoneAlias ? 'phone' : isGoogleProvider ? 'google' : 'email',
+              isAdmin: isVerifiedFirebaseOwnerAdmin(user),
+              status: 'active',
+            };
+            currentUserRef.current = cachedUser;
+            setCurrentUser((prev) => prev || cachedUser);
           }
-          console.error('Could not load authenticated server profile:', err);
-          setCurrentUser(null);
-          setUserProfile(null);
-          setBalance(0);
-          serverWalletBalanceRef.current = null;
-          setAuthNoticeMessage('সার্ভারের সাথে সংযোগ হয়নি। কিছুক্ষণ পর আবার লগইন করুন।');
         }
       } else if (!hasBackendAuthToken()) {
         // Check if an HttpOnly server session cookie exists (e.g. after page refresh for mobile login).

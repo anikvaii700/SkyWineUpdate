@@ -1373,7 +1373,7 @@ export default function App() {
     let timer: NodeJS.Timeout | null = null;
 
     if (roundStatus === 'WAITING') {
-      soundManager.stopEngineSound();
+      soundManager.setPlaneFlightActive(false);
       setCurrentMultiplier(1.0);
       currentMultiplierRef.current = 1.0;
       bet1CashedOutRef.current = false;
@@ -1452,7 +1452,6 @@ export default function App() {
           crashTargetRef.current = nextCrash;
           setFinalCrashMultiplier(nextCrash);
           setRoundStatus('FLYING');
-          soundManager.startEngineSound();
           flightStartTimeRef.current = Date.now();
         }
       }, 50);
@@ -1519,7 +1518,7 @@ export default function App() {
           // CRASH EVENT! (Capped strictly at max 100x)
           isFlying = false;
           setCurrentMultiplier(Math.min(100.00, crashTargetRef.current));
-          soundManager.playCrash();
+          soundManager.playPlaneCrash();
           setRoundStatus('CRASHED');
 
           // Record lost bets
@@ -1647,6 +1646,14 @@ export default function App() {
   useEffect(() => {
     soundManager.setAviatorMusicActive(isAviatorAudioEligible);
   }, [isAviatorAudioEligible]);
+
+  // Layer airplane flying sound over default Aviator BGM whenever the user has placed a bet and the plane is flying
+  const hasPlacedAviatorBet = bet1.isPlaced || bet2.isPlaced;
+  useEffect(() => {
+    const shouldPlayFlightSound =
+      isAviatorAudioEligible && roundStatus === 'FLYING' && hasPlacedAviatorBet;
+    soundManager.setPlaneFlightActive(shouldPlayFlightSound);
+  }, [isAviatorAudioEligible, roundStatus, hasPlacedAviatorBet]);
 
   useEffect(() => {
     return () => {

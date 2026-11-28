@@ -8,8 +8,20 @@ type PlayableAudioElement = HTMLAudioElement & { playsInline?: boolean };
 class SoundManager {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
-  private engineOscillator: OscillatorNode | null = null;
-  private engineGain: GainNode | null = null;
+
+  // Layered airplane flight audio nodes (active only while flying with an active bet)
+  private engineMasterGain: GainNode | null = null;
+  private engineHumOsc: OscillatorNode | null = null;
+  private engineTurbineOsc: OscillatorNode | null = null;
+  private engineLfoOsc: OscillatorNode | null = null;
+  private engineLfoGain: GainNode | null = null;
+  private engineHumFilter: BiquadFilterNode | null = null;
+  private engineNoiseSource: AudioBufferSourceNode | null = null;
+  private engineNoiseFilter: BiquadFilterNode | null = null;
+  private engineNoiseGain: GainNode | null = null;
+  private noiseBuffer: AudioBuffer | null = null;
+  private engineDesiredActive: boolean = false;
+  private isEngineRunning: boolean = false;
 
   // Single-instance looping background music state
   private bgmAudio: PlayableAudioElement | null = null;
@@ -36,21 +48,25 @@ class SoundManager {
         this.ctx.resume().catch(() => {});
       }
       this.syncBgmPlayback();
+      this.syncEnginePlayback();
     };
 
     const handleVisibilityChange = () => {
       this.isPageHidden = document.hidden;
       this.syncBgmPlayback();
+      this.syncEnginePlayback();
     };
 
     const handlePageHide = () => {
       this.isPageHidden = true;
       this.pauseBgm();
+      this.stopEngineSound();
     };
 
     const handlePageShow = () => {
       this.isPageHidden = document.hidden;
       this.syncBgmPlayback();
+      this.syncEnginePlayback();
     };
 
     // Bubble-phase listeners run after React's onClick so muting on the first tap never triggers a blip.
@@ -147,6 +163,139 @@ class SoundManager {
     }
   }
 
+  private getNoiseBuffer(): AudioBuffer | null {
+    if (!this.ctx) return null;
+    if (!this.noiseBuffer || this.noiseBuffer.sampleRate !== this.ctx.sampleRate) {
+      const durationSec = 2;
+      const bufferSize = Math.floor(this.ctx.sampleRate * durationSec);
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const output = buffer.getChannelData(0);
+      // Warm pink-tinted noise for realistic jet airflow & crash rumble
+      let b0 = 0, b1 = 0, b2 = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99765 * b0 + white * 0.099046;
+        b1 = 0.96300 * b1 + white * 0.2965164;
+        b2 = 0.57000 * b2 + white * 1.0526913;
+        output[i] = Math.max(-1, Math.min(1, (b0 + b1 + b2 + white * 0.1848) * 0.18));
+      }
+      this.noiseBuffer = buffer;
+    }
+    return this.noiseBuffer;
+  }
+
+  private syncEnginePlayback() {
+    if (!this.engineDesiredActive || !this.bgmDesiredActive || this.isMuted || this.isPageHidden) {
+      this.stopEngineSound();
+      return;
+    }
+    if (!this.hasUserInteracted || this.isEngineRunning) {
+      return;
+    }
+    this.startEngineNodes();
+  }
+
+  private startEngineNodes() {
+    if (this.isEngineRunning || this.isMuted || this.isPageHidden || !this.bgmDesiredActive) {
+      return;
+    }
+    try {
+      this.initContext();
+      if (!this.ctx) return;
+
+      const now = this.ctx.currentTime;
+      const masterGain = this.ctx.createGain();
+      masterGain.gain.setValueAtTime(0.0001, now);
+      masterGain.gain.exponentialRampToValueAtTime(0.32, now + 0.55);
+      masterGain.connect(this.ctx.destination);
+
+      // 1. Warm propeller / aircraft engine core hum
+      const humOsc = this.ctx.createOscillator();
+      humOsc.type = 'sawtooth';
+      humOsc.frequency.setValueAtTime(68, now);
+      humOsc.frequency.exponentialRampToValueAtTime(102, now + 0.75);
+
+      const humFilter = this.ctx.createBiquadFilter();
+      humFilter.type = 'lowpass';
+      humFilter.frequency.setValueAtTime(240, now);
+      humFilter.frequency.exponentialRampToValueAtTime(420, now + 0.75);
+      humFilter.Q.setValueAtTime(2.2, now);
+
+      const humGain = this.ctx.createGain();
+      humGain.gain.setValueAtTime(0.34, now);
+
+      // Subtle propeller thrum modulation via LFO
+      const lfoOsc = this.ctx.createOscillator();
+      lfoOsc.type = 'sine';
+      lfoOsc.frequency.setValueAtTime(17, now);
+
+      const lfoGain = this.ctx.createGain();
+      lfoGain.gain.setValueAtTime(0.06, now);
+
+      lfoOsc.connect(lfoGain);
+      lfoGain.connect(humGain.gain);
+
+      humOsc.connect(humFilter);
+      humFilter.connect(humGain);
+      humGain.connect(masterGain);
+
+      // 2. Smooth jet turbine harmonic whine
+      const turbineOsc = this.ctx.createOscillator();
+      turbineOsc.type = 'triangle';
+      turbineOsc.frequency.setValueAtTime(195, now);
+      turbineOsc.frequency.exponentialRampToValueAtTime(290, now + 0.8);
+
+      const turbineGain = this.ctx.createGain();
+      turbineGain.gain.setValueAtTime(0.09, now);
+
+      turbineOsc.connect(turbineGain);
+      turbineGain.connect(masterGain);
+
+      // 3. Jet airflow / wind whoosh (bandpass-filtered noise)
+      const buffer = this.getNoiseBuffer();
+      let noiseSource: AudioBufferSourceNode | null = null;
+      let noiseFilter: BiquadFilterNode | null = null;
+      let noiseGain: GainNode | null = null;
+
+      if (buffer) {
+        noiseSource = this.ctx.createBufferSource();
+        noiseSource.buffer = buffer;
+        noiseSource.loop = true;
+
+        noiseFilter = this.ctx.createBiquadFilter();
+        noiseFilter.type = 'bandpass';
+        noiseFilter.frequency.setValueAtTime(340, now);
+        noiseFilter.frequency.exponentialRampToValueAtTime(680, now + 0.8);
+        noiseFilter.Q.setValueAtTime(1.1, now);
+
+        noiseGain = this.ctx.createGain();
+        noiseGain.gain.setValueAtTime(0.55, now);
+
+        noiseSource.connect(noiseFilter);
+        noiseFilter.connect(noiseGain);
+        noiseGain.connect(masterGain);
+        noiseSource.start(now);
+      }
+
+      humOsc.start(now);
+      lfoOsc.start(now);
+      turbineOsc.start(now);
+
+      this.engineMasterGain = masterGain;
+      this.engineHumOsc = humOsc;
+      this.engineHumFilter = humFilter;
+      this.engineTurbineOsc = turbineOsc;
+      this.engineLfoOsc = lfoOsc;
+      this.engineLfoGain = lfoGain;
+      this.engineNoiseSource = noiseSource;
+      this.engineNoiseFilter = noiseFilter;
+      this.engineNoiseGain = noiseGain;
+      this.isEngineRunning = true;
+    } catch {
+      this.stopEngineSound();
+    }
+  }
+
   public setMuted(muted: boolean) {
     this.isMuted = muted;
     if (muted) {
@@ -155,6 +304,7 @@ class SoundManager {
     } else {
       this.hasUserInteracted = true;
       this.syncBgmPlayback();
+      this.syncEnginePlayback();
     }
   }
 
@@ -166,13 +316,28 @@ class SoundManager {
     this.bgmDesiredActive = active;
     if (active) {
       this.syncBgmPlayback();
+      this.syncEnginePlayback();
     } else {
       this.pauseBgm();
+      this.stopEngineSound();
+    }
+  }
+
+  public setPlaneFlightActive(active: boolean) {
+    this.engineDesiredActive = active;
+    if (active) {
+      if (this.bgmDesiredActive) {
+        this.syncBgmPlayback();
+      }
+      this.syncEnginePlayback();
+    } else {
+      this.stopEngineSound();
     }
   }
 
   public stopAllMusic() {
     this.bgmDesiredActive = false;
+    this.engineDesiredActive = false;
     this.pauseBgm();
     if (this.bgmAudio) {
       try {
@@ -190,6 +355,7 @@ class SoundManager {
 
   // Button click / chip select
   public playClick() {
+    this.hasUserInteracted = true;
     if (this.isMuted) return;
     try {
       this.initContext();
@@ -241,31 +407,96 @@ class SoundManager {
     }
   }
 
-  // Kept for backward compatibility: ensures the Aviator MP3 background loop stays playing when Aviator is active
+  // Starts the airplane flying engine sound layered over the default Aviator BGM
   public startEngineSound() {
-    if (this.bgmDesiredActive) {
-      this.syncBgmPlayback();
-    }
+    this.setPlaneFlightActive(true);
   }
 
-  public updateEnginePitch(_multiplier: number) {
-    // No-op: replaced synthesized propeller pitch ramp with looping MP3 background music
-  }
-
-  public stopEngineSound() {
+  // Smoothly raises airplane pitch, propeller cadence, and airflow as multiplier climbs
+  public updateEnginePitch(multiplier: number) {
+    if (!this.isEngineRunning || !this.ctx || this.isMuted) return;
     try {
-      if (this.engineOscillator) {
-        this.engineOscillator.stop();
-        this.engineOscillator.disconnect();
-        this.engineOscillator = null;
+      const now = this.ctx.currentTime;
+      const safeMult = Math.max(1, multiplier);
+      const climb = Math.min(1, Math.log2(safeMult) / 5.5); // smooth 0 -> 1 curve up to ~45x
+
+      if (this.engineHumOsc) {
+        const targetHum = 102 + climb * 98; // 102 Hz -> 200 Hz
+        this.engineHumOsc.frequency.setTargetAtTime(targetHum, now, 0.12);
       }
-      if (this.engineGain) {
-        this.engineGain.disconnect();
-        this.engineGain = null;
+      if (this.engineHumFilter) {
+        const targetCutoff = 420 + climb * 460; // 420 Hz -> 880 Hz
+        this.engineHumFilter.frequency.setTargetAtTime(targetCutoff, now, 0.12);
+      }
+      if (this.engineTurbineOsc) {
+        const targetTurbine = 290 + climb * 340; // 290 Hz -> 630 Hz
+        this.engineTurbineOsc.frequency.setTargetAtTime(targetTurbine, now, 0.12);
+      }
+      if (this.engineLfoOsc) {
+        const targetLfo = 17 + climb * 16; // 17 Hz -> 33 Hz
+        this.engineLfoOsc.frequency.setTargetAtTime(targetLfo, now, 0.12);
+      }
+      if (this.engineNoiseFilter) {
+        const targetAirflow = 680 + climb * 820; // 680 Hz -> 1500 Hz
+        this.engineNoiseFilter.frequency.setTargetAtTime(targetAirflow, now, 0.12);
       }
     } catch {
       // ignore
     }
+  }
+
+  public stopEngineSound() {
+    this.isEngineRunning = false;
+    const ctx = this.ctx;
+    const masterGain = this.engineMasterGain;
+    const humOsc = this.engineHumOsc;
+    const turbineOsc = this.engineTurbineOsc;
+    const lfoOsc = this.engineLfoOsc;
+    const lfoGain = this.engineLfoGain;
+    const humFilter = this.engineHumFilter;
+    const noiseSource = this.engineNoiseSource;
+    const noiseFilter = this.engineNoiseFilter;
+    const noiseGain = this.engineNoiseGain;
+
+    this.engineMasterGain = null;
+    this.engineHumOsc = null;
+    this.engineTurbineOsc = null;
+    this.engineLfoOsc = null;
+    this.engineLfoGain = null;
+    this.engineHumFilter = null;
+    this.engineNoiseSource = null;
+    this.engineNoiseFilter = null;
+    this.engineNoiseGain = null;
+
+    const cleanupNodes = () => {
+      try { humOsc?.stop(); } catch {}
+      try { turbineOsc?.stop(); } catch {}
+      try { lfoOsc?.stop(); } catch {}
+      try { noiseSource?.stop(); } catch {}
+      try { humOsc?.disconnect(); } catch {}
+      try { turbineOsc?.disconnect(); } catch {}
+      try { lfoOsc?.disconnect(); } catch {}
+      try { lfoGain?.disconnect(); } catch {}
+      try { humFilter?.disconnect(); } catch {}
+      try { noiseSource?.disconnect(); } catch {}
+      try { noiseFilter?.disconnect(); } catch {}
+      try { noiseGain?.disconnect(); } catch {}
+      try { masterGain?.disconnect(); } catch {}
+    };
+
+    if (ctx && masterGain) {
+      try {
+        const now = ctx.currentTime;
+        masterGain.gain.cancelScheduledValues(now);
+        masterGain.gain.setValueAtTime(Math.max(0.0001, masterGain.gain.value), now);
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+        window.setTimeout(cleanupNodes, 85);
+        return;
+      } catch {
+        // fall through to immediate cleanup
+      }
+    }
+    cleanupNodes();
   }
 
   // Triumphant win chime when user cashes out
@@ -300,9 +531,85 @@ class SoundManager {
     }
   }
 
-  // Plane crash / flew away sound
-  public playCrash() {
+  // Realistic Aviator airplane crash / flew-away impact sound
+  public playPlaneCrash() {
+    this.engineDesiredActive = false;
     this.stopEngineSound();
+    if (this.isMuted || this.isPageHidden || !this.bgmDesiredActive || !this.hasUserInteracted) {
+      return;
+    }
+    try {
+      this.initContext();
+      if (!this.ctx) return;
+
+      const now = this.ctx.currentTime;
+
+      // 1. Deep sub-bass crash boom impact
+      const boomOsc = this.ctx.createOscillator();
+      const boomGain = this.ctx.createGain();
+      boomOsc.type = 'sine';
+      boomOsc.frequency.setValueAtTime(145, now);
+      boomOsc.frequency.exponentialRampToValueAtTime(32, now + 0.55);
+
+      boomGain.gain.setValueAtTime(0.45, now);
+      boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+
+      boomOsc.connect(boomGain);
+      boomGain.connect(this.ctx.destination);
+      boomOsc.start(now);
+      boomOsc.stop(now + 0.68);
+
+      // 2. Turbine stall / downward dive pitch drop
+      const diveOsc = this.ctx.createOscillator();
+      const diveFilter = this.ctx.createBiquadFilter();
+      const diveGain = this.ctx.createGain();
+
+      diveOsc.type = 'sawtooth';
+      diveOsc.frequency.setValueAtTime(360, now);
+      diveOsc.frequency.exponentialRampToValueAtTime(48, now + 0.45);
+
+      diveFilter.type = 'lowpass';
+      diveFilter.frequency.setValueAtTime(950, now);
+      diveFilter.frequency.exponentialRampToValueAtTime(160, now + 0.45);
+
+      diveGain.gain.setValueAtTime(0.22, now);
+      diveGain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+
+      diveOsc.connect(diveFilter);
+      diveFilter.connect(diveGain);
+      diveGain.connect(this.ctx.destination);
+      diveOsc.start(now);
+      diveOsc.stop(now + 0.5);
+
+      // 3. Explosion & jet fly-away whoosh burst (filtered noise)
+      const buffer = this.getNoiseBuffer();
+      if (buffer) {
+        const crashNoise = this.ctx.createBufferSource();
+        crashNoise.buffer = buffer;
+
+        const crashFilter = this.ctx.createBiquadFilter();
+        crashFilter.type = 'lowpass';
+        crashFilter.frequency.setValueAtTime(1650, now);
+        crashFilter.frequency.exponentialRampToValueAtTime(140, now + 0.78);
+        crashFilter.Q.setValueAtTime(0.9, now);
+
+        const crashGain = this.ctx.createGain();
+        crashGain.gain.setValueAtTime(0.5, now);
+        crashGain.gain.exponentialRampToValueAtTime(0.001, now + 0.85);
+
+        crashNoise.connect(crashFilter);
+        crashFilter.connect(crashGain);
+        crashGain.connect(this.ctx.destination);
+        crashNoise.start(now);
+        crashNoise.stop(now + 0.88);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Short UI alert / error buzz (used for invalid inputs & rejected actions)
+  public playCrash() {
     if (this.isMuted) return;
     try {
       this.initContext();
